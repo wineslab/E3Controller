@@ -1,0 +1,3 @@
+[submodule "jbpf"]
+	path = jbpf
+	url = https://github.com/microsoft/jbpf.git

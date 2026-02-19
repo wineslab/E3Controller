@@ -1,0 +1,261 @@
+/*
+ * e3_manager.cpp
+ *
+ * E3Manager: a standalone daemon process that connects to srsRAN's jbpf
+ * shared memory as an IPC primary process. It receives output data from
+ * codelets and dispatches to registered handlers.
+ *
+ * Based on the jbpf IPC primary pattern from:
+ *   jbpf/examples/first_example_ipc/example_collect_control.cpp
+ *
+ * Usage:
+ *   e3_manager [--ipc-name <name>] [--mem-size <bytes>]
+ *
+ * The IPC primary must start BEFORE srsRAN (IPC secondary).
+ */
+
+#include <iostream>
+#include <vector>
+#include <memory>
+#include <csignal>
+#include <cstring>
+#include <cstdlib>
+#include <unistd.h>
+#include <getopt.h>
+#include <atomic>
+
+extern "C" {
+#include "jbpf_io.h"
+#include "jbpf_io_channel.h"
+#include "jbpf_common.h"
+#include "jbpf_mem_mgmt.h"
+}
+
+#include "e3_data_handler.h"
+#include "ecpri_iq_handler.h"
+
+// ---- Global state ----
+
+static std::atomic<bool> g_running{true};
+static std::vector<std::unique_ptr<E3DataHandler>> g_handlers;
+static struct jbpf_io_ctx* g_io_ctx = nullptr;
+
+// ---- Signal handler ----
+
+static void signal_handler(int signo)
+{
+    if (signo == SIGINT || signo == SIGTERM) {
+        std::printf("\n[E3Manager] Received signal %d, shutting down...\n", signo);
+        g_running = false;
+    }
+}
+
+// ---- IPC output buffer callback ----
+
+static void handle_channel_bufs(
+    struct jbpf_io_channel* io_channel,
+    struct jbpf_io_stream_id* stream_id,
+    void** bufs,
+    int num_bufs,
+    void* ctx)
+{
+    if (!stream_id || num_bufs <= 0) {
+        return;
+    }
+
+    // Find a registered handler for this stream_id
+    bool handled = false;
+    for (auto& handler : g_handlers) {
+        if (std::memcmp(&handler->stream_id(), stream_id, sizeof(struct jbpf_io_stream_id)) == 0) {
+            handler->handle(bufs, num_bufs);
+            handled = true;
+            break;
+        }
+    }
+
+    if (!handled) {
+        // Log unknown stream (print stream_id bytes for debugging)
+        std::printf("[E3Manager] Received %d buf(s) from unknown stream: ", num_bufs);
+        for (int i = 0; i < JBPF_IO_STREAM_ID_LEN; i++) {
+            std::printf("%02x", stream_id->id[i]);
+        }
+        std::printf("\n");
+    }
+
+    // Release all buffers
+    for (int i = 0; i < num_bufs; i++) {
+        jbpf_io_channel_release_buf(bufs[i]);
+    }
+}
+
+// ---- Configuration ----
+
+struct E3Config {
+    std::string ipc_name = "e3_manager";
+    size_t mem_size = JBPF_HUGEPAGE_SIZE_1GB;
+    int poll_interval_us = 100;  // microseconds between polls
+};
+
+static void print_usage(const char* prog)
+{
+    std::printf("Usage: %s [options]\n"
+                "Options:\n"
+                "  --ipc-name <name>     IPC shared memory name (default: e3_manager)\n"
+                "  --mem-size <bytes>    Shared memory size in bytes (default: 1GB)\n"
+                "  --poll-interval <us>  Poll interval in microseconds (default: 100)\n"
+                "  --help                Show this help\n",
+                prog);
+}
+
+static E3Config parse_args(int argc, char** argv)
+{
+    E3Config config;
+
+    static struct option long_options[] = {
+        {"ipc-name",      required_argument, nullptr, 'n'},
+        {"mem-size",      required_argument, nullptr, 'm'},
+        {"poll-interval", required_argument, nullptr, 'p'},
+        {"help",          no_argument,       nullptr, 'h'},
+        {nullptr,         0,                 nullptr,  0 }
+    };
+
+    int opt;
+    while ((opt = getopt_long(argc, argv, "n:m:p:h", long_options, nullptr)) != -1) {
+        switch (opt) {
+        case 'n':
+            config.ipc_name = optarg;
+            break;
+        case 'm':
+            config.mem_size = std::strtoull(optarg, nullptr, 0);
+            break;
+        case 'p':
+            config.poll_interval_us = std::atoi(optarg);
+            break;
+        case 'h':
+        default:
+            print_usage(argv[0]);
+            std::exit(opt == 'h' ? 0 : 1);
+        }
+    }
+
+    return config;
+}
+
+// ---- Handler registration ----
+
+/*
+ * Register all data handlers here. Each handler is associated with a
+ * specific stream_id that matches the codelet's output channel.
+ *
+ * NOTE: The stream_id is assigned when the codelet is loaded.
+ *       You can find it in the codelet YAML or load request.
+ *       For the eCPRI I/Q codelet, the stream_id for output_map
+ *       must be configured in the codelet load request.
+ *
+ * To add new handlers for other codelets:
+ * 1. Create a new handler class implementing E3DataHandler
+ * 2. Define its stream_id
+ * 3. Register it in this function
+ */
+static void register_handlers()
+{
+    // eCPRI I/Q handler
+    // This stream_id must match what is configured for the codelet's output_map.
+    // You can customize this via the codelet load request YAML.
+    struct jbpf_io_stream_id ecpri_iq_stream_id = {
+        .id = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+               0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
+    };
+
+    g_handlers.push_back(std::make_unique<EcpriIqHandler>(ecpri_iq_stream_id));
+
+    std::printf("[E3Manager] Registered %zu handler(s):\n", g_handlers.size());
+    for (auto& h : g_handlers) {
+        std::printf("  - %s (stream: ", h->name());
+        auto& sid = h->stream_id();
+        for (int i = 0; i < JBPF_IO_STREAM_ID_LEN; i++) {
+            std::printf("%02x", sid.id[i]);
+        }
+        std::printf(")\n");
+    }
+}
+
+// ---- Main ----
+
+int main(int argc, char** argv)
+{
+    E3Config config = parse_args(argc, argv);
+
+    std::printf("=============================================\n");
+    std::printf("  E3Manager - Codelet Data Daemon\n");
+    std::printf("=============================================\n");
+    std::printf("  IPC name:       %s\n", config.ipc_name.c_str());
+    std::printf("  Memory size:    %zu bytes\n", config.mem_size);
+    std::printf("  Poll interval:  %d us\n", config.poll_interval_us);
+    std::printf("=============================================\n\n");
+
+    // Install signal handlers
+    if (signal(SIGINT, signal_handler) == SIG_ERR ||
+        signal(SIGTERM, signal_handler) == SIG_ERR) {
+        std::perror("[E3Manager] Failed to install signal handlers");
+        return 1;
+    }
+
+    // Initialize jbpf IO as IPC primary
+    struct jbpf_io_config io_config = {};
+    io_config.type = JBPF_IO_IPC_PRIMARY;
+
+    std::strncpy(io_config.jbpf_path, JBPF_DEFAULT_RUN_PATH, JBPF_RUN_PATH_LEN - 1);
+    io_config.jbpf_path[JBPF_RUN_PATH_LEN - 1] = '\0';
+
+    std::strncpy(io_config.jbpf_namespace, JBPF_DEFAULT_NAMESPACE, JBPF_NAMESPACE_LEN - 1);
+    io_config.jbpf_namespace[JBPF_NAMESPACE_LEN - 1] = '\0';
+
+    std::strncpy(io_config.ipc_config.addr.jbpf_io_ipc_name,
+                 config.ipc_name.c_str(),
+                 JBPF_IO_IPC_MAX_NAMELEN - 1);
+    io_config.ipc_config.addr.jbpf_io_ipc_name[JBPF_IO_IPC_MAX_NAMELEN - 1] = '\0';
+
+    io_config.ipc_config.mem_cfg.memory_size = config.mem_size;
+
+    std::printf("[E3Manager] Initializing jbpf IO (IPC primary)...\n");
+    g_io_ctx = jbpf_io_init(&io_config);
+    if (!g_io_ctx) {
+        std::fprintf(stderr, "[E3Manager] ERROR: Failed to initialize jbpf IO.\n"
+                             "  Make sure no other IPC primary is running with the same name.\n");
+        return 1;
+    }
+    std::printf("[E3Manager] jbpf IO initialized successfully.\n");
+
+    // Register this thread for jbpf IO operations
+    if (!jbpf_io_register_thread()) {
+        std::fprintf(stderr, "[E3Manager] ERROR: Failed to register IO thread.\n");
+        jbpf_io_stop();
+        return 1;
+    }
+
+    // Register data handlers
+    register_handlers();
+
+    // Main polling loop
+    std::printf("[E3Manager] Entering main loop. Waiting for codelet data...\n");
+    std::printf("[E3Manager] (Start srsRAN with jbpf agent to begin receiving data)\n\n");
+
+    while (g_running) {
+        // Poll for output data from all connected agents/codelets
+        jbpf_io_channel_handle_out_bufs(g_io_ctx, handle_channel_bufs, g_io_ctx);
+
+        // Sleep between polls to avoid busy-waiting
+        if (config.poll_interval_us > 0) {
+            usleep(config.poll_interval_us);
+        }
+    }
+
+    // Cleanup
+    std::printf("[E3Manager] Shutting down...\n");
+    jbpf_io_stop();
+    g_handlers.clear();
+    std::printf("[E3Manager] Stopped.\n");
+
+    return 0;
+}
