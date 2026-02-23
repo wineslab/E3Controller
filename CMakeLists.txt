@@ -41,6 +41,9 @@ add_subdirectory(jbpf)
 unset(add_test)
 unset(set_tests_properties)
 
+# ---- ASN.1 (E3 Service Model) ----
+add_subdirectory(src/e3sm/asn)
+
 # ---- E3Manager executable ----
 add_executable(e3_manager
   src/e3_manager.cpp

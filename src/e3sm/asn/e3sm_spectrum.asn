@@ -1,0 +1,54 @@
+-- Spectrum Service Model ASN.1 Definitions
+-- This service model extends E3 messages for spectrum sharing applications
+--
+-- Usage with E3 Protocol:
+-- - Spectrum-IndicationData structures are encoded into the protocolData field of E3-IndicationMessage
+-- - Spectrum-ControlData structures are encoded into the actionData field of E3-ControlAction
+-- - Use E3-PDU as the top-level message structure, not the removed Spectrum-PDU
+
+SPECTRUM-SM DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+
+-- ============================================================================
+-- INDICATION MESSAGE STRUCTURES
+-- ============================================================================
+
+-- Spectrum IQ Data Indication (raw I/Q samples from RAN)
+Spectrum-IQDataIndication ::= SEQUENCE {
+    iqSamples               OCTET STRING (SIZE (1..16384)),                 -- Raw I/Q data as int16 array
+    sampleCount             INTEGER (0..32768),                             -- Number of I/Q samples
+    timestamp               INTEGER (0..2147483647) OPTIONAL                -- Unix timestamp when samples were captured
+}
+
+-- ============================================================================
+-- CONTROL ACTION STRUCTURES  
+-- ============================================================================
+
+-- PRB Blacklist Control (main control message used by spectrum dApp)
+Spectrum-PRBBlacklistControl ::= SEQUENCE {
+    blacklistedPRBs   SEQUENCE (SIZE (0..maxPRBs)) OF INTEGER (0..maxPRBIndex),     -- List of PRB indices
+    samplingThreshold       INTEGER (0..100) OPTIONAL,                              -- Sampling ratio for the IQ captures, one delivery each samplingThreshold
+    validityPeriod          INTEGER (1..3600) OPTIONAL                              -- How long this blacklist is valid (seconds)
+}
+
+-- ============================================================================
+-- xAPP CONTROL ACTION STRUCTURES  
+-- ============================================================================
+
+
+-- Spectrum Configuration Control
+Spectrum-ConfigControl ::= SEQUENCE {
+    noiseFloorThreshold     INTEGER (-100..100) OPTIONAL,                   -- Update noise floor threshold
+    averagingFrames         INTEGER (1..255) OPTIONAL,                      -- Update averaging window
+    enable                  BOOLEAN OPTIONAL                                -- Enable/disable spectrum monitoring
+}
+
+
+-- ============================================================================
+-- CONSTANTS AND CONSTRAINTS
+-- ============================================================================
+
+-- Maximum values based on 5G NR specifications
+maxPRBs                     INTEGER ::= 273                                 -- Maximum PRBs in 5G NR
+maxPRBIndex                 INTEGER ::= 272                                 -- maxPRBs - 1
+
+END
