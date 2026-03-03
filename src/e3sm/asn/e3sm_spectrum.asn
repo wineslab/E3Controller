@@ -4,9 +4,20 @@
 -- Usage with E3 Protocol:
 -- - Spectrum-IndicationData structures are encoded into the protocolData field of E3-IndicationMessage
 -- - Spectrum-ControlData structures are encoded into the actionData field of E3-ControlAction
--- - Use E3-PDU as the top-level message structure, not the removed Spectrum-PDU
+-- - Use E3-PDU as the top-level message structure
 
 SPECTRUM-SM DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+
+-- ============================================================================
+-- SM SPECTRUM RAN FUNCTION DATA STRUCTURES  
+-- ============================================================================
+
+-- Spectrum RAN function data
+Spectrum-RanFunctionData ::= SEQUENCE {
+    name                    OCTET STRING (SIZE (1..32)),
+    version                 INTEGER (0..65535),
+    description             OCTET STRING (SIZE (1..128))
+}
 
 -- ============================================================================
 -- INDICATION MESSAGE STRUCTURES

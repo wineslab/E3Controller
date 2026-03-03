@@ -44,15 +44,21 @@ unset(set_tests_properties)
 # ---- ASN.1 (E3 Service Model) ----
 add_subdirectory(src/e3sm/asn)
 
+# ---- spear-libe3 (E3 agent library) ----
+# Requires libe3 to be installed: cd ../spear-libe3/build && sudo make install
+find_package(libe3 REQUIRED)
+
 # ---- E3Manager executable ----
 add_executable(e3_manager
   src/e3_manager.cpp
-  src/ecpri_iq_handler.cpp
+  src/e3sm_spectrum.cpp
+  src/e3sm/e3sm_spect_wrapper.cpp
 )
 
 # Include paths: our own headers + jbpf headers
 target_include_directories(e3_manager PRIVATE
   ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/jbpf/src/io
   ${CMAKE_SOURCE_DIR}/jbpf/src/mem_mgmt
   ${CMAKE_SOURCE_DIR}/jbpf/src/logger
@@ -63,6 +69,8 @@ target_include_directories(e3_manager PRIVATE
 # Link against jbpf_io (transitively brings mem_mgmt, logger, ck, mimalloc)
 target_link_libraries(e3_manager PRIVATE
   jbpf::io_lib
+  e3sm_asn
+  libe3::libe3
   pthread
   rt
   dl
