@@ -191,17 +191,34 @@ int main(int argc, char** argv)
 
     // Create the central dispatcher — routes jbpf buffers to service models
     JbpfDispatcher dispatcher(io_ctx);
-
+    
     // Register service models (each SM registers its stream_ids with the dispatcher)
-    auto sm_result = agent.register_sm(std::make_unique<E3SMSpectrum>(dispatcher));
+    libe3::ErrorCode sm_result = agent.register_sm(std::make_unique<E3SMSpectrum>(dispatcher));
     if (sm_result != libe3::ErrorCode::SUCCESS) {
         std::cerr << "Failed to register Spectrum SM: "
                   << libe3::error_code_to_string(sm_result) << "\n";
         return 1;
     }
 
+    // TODO: For testing only — eagerly start the SM so the dispatcher receives
+    // buffers immediately, without waiting for a dApp to subscribe.
+    // In production, remove this and let libe3 start the SM on first subscription.
+    // {
+    //     auto* spectrum_sm = dynamic_cast<E3SMSpectrum*>(
+    //         libe3::SmRegistry::instance().get_by_ran_function(E3SMSpectrum::RAN_FUNCTION_ID));
+    //     if (spectrum_sm) {
+    //         auto rc = spectrum_sm->start();
+    //         if (rc != libe3::ErrorCode::SUCCESS) {
+    //             std::cerr << "Failed to eagerly start Spectrum SM: "
+    //                       << libe3::error_code_to_string(rc) << "\n";
+    //             return 1;
+    //         }
+    //         std::printf("[E3Manager] Spectrum SM started eagerly (test mode).\n");
+    //     }
+    // }
+
     // Start the agent (calls SM::start(), which registers streams with dispatcher)
-    auto start_result = agent.start();
+    libe3::ErrorCode start_result = agent.start();
     if (start_result != libe3::ErrorCode::SUCCESS) {
         std::cerr << "Failed to start agent: "
                   << libe3::error_code_to_string(start_result) << "\n";

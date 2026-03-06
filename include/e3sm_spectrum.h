@@ -50,7 +50,7 @@ public:
 
     bool is_running() const override { return running_; }
 
-    libe3::ErrorCode handle_control_action(uint32_t request_message_id,const libe3::DAppControlAction& action) override {std::cout << "This service model does not support control actions.\n"; return libe3::ErrorCode::NOT_FOUND;   };
+    libe3::ErrorCode handle_control_action(uint32_t request_message_id, const libe3::DAppControlAction& action) override;
 
    
 

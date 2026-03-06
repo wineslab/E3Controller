@@ -19,6 +19,7 @@ A standalone C++ daemon that bridges srsRAN's jbpf shared memory (IPC primary) w
 sudo apt-get install -y bison flex
 git clone https://github.com/mouse07410/asn1c.git
 cd asn1c
+test -f configure || autoreconf -iv
 ./configure
 make -j$(nproc)
 sudo make install

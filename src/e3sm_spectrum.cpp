@@ -21,8 +21,12 @@ libe3::ErrorCode E3SMSpectrum::start()
 }
 
 std::vector<uint8_t> E3SMSpectrum::ran_function_data() const {
-    const std::string sm_name = "Spectrum Service Model";
-    return std::vector<uint8_t>(sm_name.begin(), sm_name.end());
+    std::vector<uint8_t> encoded;
+    if (!e3sm_spectrum::encode_spectrum_ran_function_data(encoded)) {
+        std::fprintf(stderr, "[E3SMSpectrum] Failed to APER-encode RAN function data\n");
+        return {};
+    }
+    return encoded;
 }
 
 void E3SMSpectrum::process_buffers(struct jbpf_io_stream_id* stream_id, void** bufs, int num_bufs) {
@@ -49,7 +53,9 @@ void E3SMSpectrum::process_buffers(struct jbpf_io_stream_id* stream_id, void** b
                     sample->comp_method,
                     sample->iq_width,
                     sample->payload_size);
-
+        // TODO: need to be checked
+        // Why I need to check has subscribers if the sm does not start if I do not have any?
+        // Also, I think the library will check to which subscriber send the indication
         if (has_subscribers) {
             // Build the indication from shared memory data
             e3sm_spectrum::SpectrumIQIndication indication;
@@ -88,4 +94,33 @@ void E3SMSpectrum::stop() {
     // Unregister from the dispatcher so we stop receiving buffers
     dispatcher_.unregister_stream(ecpri_iq_stream_id_);
     running_ = false;
+}
+
+libe3::ErrorCode E3SMSpectrum::handle_control_action(
+    uint32_t request_message_id,
+    const libe3::DAppControlAction& action)
+{
+    e3sm_spectrum::SpectrumPRBBlacklistControl ctrl;
+    if (!e3sm_spectrum::decode_spectrum_prb_blacklist_control(action.action_data, ctrl)) {
+        std::fprintf(stderr,
+            "[E3SMSpectrum] Failed to APER-decode PRBBlacklistControl from dApp %u\n",
+            action.dapp_identifier);
+        auto nack = make_message_ack_pdu(request_message_id, libe3::ResponseCode::NEGATIVE);
+        emit_outbound(std::move(nack));
+        return libe3::ErrorCode::DECODE_FAILED;
+    }
+
+    std::printf("[E3SMSpectrum] PRBBlacklistControl from dApp %u: "
+                "prbs=[", action.dapp_identifier);
+    for (size_t i = 0; i < ctrl.blacklisted_prbs.size(); i++) {
+        std::printf("%s%d", i > 0 ? ", " : "", ctrl.blacklisted_prbs[i]);
+    }
+    std::printf("] samplingThreshold=%d validityPeriod=%d\n",
+                ctrl.sampling_threshold, ctrl.validity_period);
+
+    // TODO: Apply the PRB blacklist to the RAN
+
+    auto ack = make_message_ack_pdu(request_message_id, libe3::ResponseCode::POSITIVE);
+    emit_outbound(std::move(ack));
+    return libe3::ErrorCode::SUCCESS;
 }

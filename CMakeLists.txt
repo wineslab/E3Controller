@@ -44,6 +44,17 @@ unset(set_tests_properties)
 # ---- ASN.1 (E3 Service Model) ----
 add_subdirectory(src/e3sm/asn)
 
+# ---- tl::expected (required by libe3 but not installed with it) ----
+include(FetchContent)
+FetchContent_Declare(
+  tl_expected
+  GIT_REPOSITORY https://github.com/TartanLlama/expected.git
+  GIT_TAG v1.1.0
+  GIT_SHALLOW TRUE
+)
+set(EXPECTED_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(tl_expected)
+
 # ---- spear-libe3 (E3 agent library) ----
 # Requires libe3 to be installed: cd ../spear-libe3/build && sudo make install
 find_package(libe3 REQUIRED)

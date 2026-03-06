@@ -9,6 +9,10 @@
 #include <optional>
 #include <string>
 
+#define SPECTRUM_RAN_FUNCTION_NAME "spectrum_sm"
+#define SPECTRUM_RAN_FUNCTION_DESCRIPTION "Spectrum service model for IQ indication and PRB blacklist control"
+#define SPECTRUM_RAN_FUNCTION_VERSION 1
+
 namespace e3sm_spectrum {
 
 struct SpectrumIQIndication {
@@ -29,6 +33,12 @@ struct SpectrumConfigControl {
     bool enable;                 // Enable/disable monitoring
 };
 
+struct SpectrumRanFunctionData {
+    std::vector<uint8_t> name;
+    int version;
+    std::vector<uint8_t> description;
+};
+
 // Encode Spectrum-IQDataIndication into APER bytes
 bool encode_spectrum_iq_indication(const SpectrumIQIndication& in, std::vector<uint8_t>& out);
 
@@ -37,5 +47,11 @@ bool encode_spectrum_prb_blacklist_control(const SpectrumPRBBlacklistControl& in
 
 // Encode Spectrum-ConfigControl into APER bytes
 bool encode_spectrum_config_control(const SpectrumConfigControl& in, std::vector<uint8_t>& out);
+
+// Encode RAN function data into APER bytes
+bool encode_spectrum_ran_function_data(std::vector<uint8_t>& out);
+
+// Decode Spectrum-PRBBlacklistControl from APER bytes
+bool decode_spectrum_prb_blacklist_control(const std::vector<uint8_t>& in, SpectrumPRBBlacklistControl& out);
 
 } // namespace e3sm_spectrum
