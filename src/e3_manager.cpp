@@ -112,7 +112,7 @@ int main(int argc, char** argv)
 
     // E3 agent configuration
     libe3::E3LinkLayer link_layer = libe3::E3LinkLayer::ZMQ;
-    libe3::E3TransportLayer transport_layer = libe3::E3TransportLayer::IPC;
+    libe3::E3TransportLayer transport_layer = libe3::E3TransportLayer::TCP;
     libe3::EncodingFormat encoding = libe3::EncodingFormat::ASN1;
     std::string ran_id = "srsRan-janus";
 
@@ -203,19 +203,20 @@ int main(int argc, char** argv)
     // TODO: For testing only — eagerly start the SM so the dispatcher receives
     // buffers immediately, without waiting for a dApp to subscribe.
     // In production, remove this and let libe3 start the SM on first subscription.
-    // {
-    //     auto* spectrum_sm = dynamic_cast<E3SMSpectrum*>(
-    //         libe3::SmRegistry::instance().get_by_ran_function(E3SMSpectrum::RAN_FUNCTION_ID));
-    //     if (spectrum_sm) {
-    //         auto rc = spectrum_sm->start();
-    //         if (rc != libe3::ErrorCode::SUCCESS) {
-    //             std::cerr << "Failed to eagerly start Spectrum SM: "
-    //                       << libe3::error_code_to_string(rc) << "\n";
-    //             return 1;
-    //         }
-    //         std::printf("[E3Manager] Spectrum SM started eagerly (test mode).\n");
-    //     }
-    // }
+    /*{
+	auto* spectrum_sm = dynamic_cast<E3SMSpectrum*>(
+        libe3::SmRegistry::instance().get_by_ran_function(E3SMSpectrum::RAN_FUNCTION_ID));
+
+         if (spectrum_sm) {
+             auto rc = spectrum_sm->start();
+             if (rc != libe3::ErrorCode::SUCCESS) {
+                 std::cerr << "Failed to eagerly start Spectrum SM: "
+                           << libe3::error_code_to_string(rc) << "\n";
+                 return 1;
+             }
+             std::printf("[E3Manager] Spectrum SM started eagerly (test mode).\n");
+         }
+     }*/
 
     // Start the agent (calls SM::start(), which registers streams with dispatcher)
     libe3::ErrorCode start_result = agent.start();

@@ -56,13 +56,13 @@ void E3SMSpectrum::process_buffers(struct jbpf_io_stream_id* stream_id, void** b
         // TODO: need to be checked
         // Why I need to check has subscribers if the sm does not start if I do not have any?
         // Also, I think the library will check to which subscriber send the indication
-        if (has_subscribers) {
+        if (has_subscribers && sample->symbol_id == 12) {
             // Build the indication from shared memory data
             e3sm_spectrum::SpectrumIQIndication indication;
             indication.iq_data.assign(
                 sample->iq_payload,
                 sample->iq_payload + sample->payload_size);
-            indication.sample_count = sample->num_prbu;
+            indication.sample_count = static_cast<uint32_t>(sample->num_prbu) * 12;
             indication.timestamp = static_cast<uint32_t>(sample->timestamp / 1000000000ULL);
 
             // APER encode
