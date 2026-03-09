@@ -51,6 +51,84 @@ static void signal_handler(int signo)
     }
 }
 
+// // ---- APER self-test ----
+// // Tests that asn1c can encode and decode an E3-PDU at startup.
+// // If this crashes, the issue is in the asn1c build/version.
+
+// extern "C" {
+// #include "E3-PDU.h"
+// #include "E3-SetupRequest.h"
+// #include "aper_encoder.h"
+// #include "aper_decoder.h"
+// #include "OCTET_STRING.h"
+// }
+
+// static bool aper_self_test()
+// {
+//     std::printf("[SelfTest] Running APER encode/decode self-test...\n");
+
+//     // 1. Encode a test SetupRequest PDU using asn1c APER
+//     E3_PDU_t pdu;
+//     memset(&pdu, 0, sizeof(pdu));
+//     pdu.id = 1;
+//     pdu.msg.present = E3_PDU__msg_PR_setupRequest;
+//     pdu.msg.choice.setupRequest = (E3_SetupRequest_t*)calloc(1, sizeof(E3_SetupRequest_t));
+//     OCTET_STRING_fromBuf(&pdu.msg.choice.setupRequest->e3apProtocolVersion, "1.0.0", 5);
+//     OCTET_STRING_fromBuf(&pdu.msg.choice.setupRequest->dAppName, "SelfTest", 8);
+//     OCTET_STRING_fromBuf(&pdu.msg.choice.setupRequest->dAppVersion, "0.0.1", 5);
+//     OCTET_STRING_fromBuf(&pdu.msg.choice.setupRequest->vendor, "Test", 4);
+
+//     uint8_t buf[512];
+//     asn_enc_rval_t enc = aper_encode_to_buffer(&asn_DEF_E3_PDU, NULL, &pdu, buf, sizeof(buf));
+//     ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_E3_PDU, &pdu);
+
+//     if (enc.encoded < 0) {
+//         std::printf("[SelfTest] FAIL: APER encode returned %zd\n", enc.encoded);
+//         return false;
+//     }
+//     size_t nbytes = (enc.encoded + 7) / 8;
+//     std::printf("[SelfTest] APER encoded %zu bytes (%zd bits): ", nbytes, enc.encoded);
+//     for (size_t i = 0; i < nbytes; i++) std::printf("%02x", buf[i]);
+//     std::printf("\n");
+
+//     // 2. Decode it back
+//     E3_PDU_t *dec_pdu = NULL;
+//     asn_dec_rval_t dec = aper_decode(NULL, &asn_DEF_E3_PDU, (void**)&dec_pdu, buf, nbytes, 0, 0);
+//     if (dec.code != RC_OK) {
+//         std::printf("[SelfTest] FAIL: APER decode returned code=%d consumed=%zu\n", dec.code, dec.consumed);
+//         if (dec_pdu) ASN_STRUCT_FREE(asn_DEF_E3_PDU, dec_pdu);
+//         return false;
+//     }
+//     std::printf("[SelfTest] APER decode OK: id=%ld, msg.present=%d, consumed=%zu bits\n",
+//                 dec_pdu->id, dec_pdu->msg.present, dec.consumed);
+//     ASN_STRUCT_FREE(asn_DEF_E3_PDU, dec_pdu);
+
+//     // 3. Now test decoding the exact bytes that asn1tools "per" codec produces
+//     // (the 40-byte setup request from the dApp)
+//     uint8_t dapp_data[] = {
+//         0x00, 0x00, 0x00, 0x05, 0x31, 0x2e, 0x30, 0x2e,
+//         0x30, 0x0f, 0x53, 0x70, 0x65, 0x63, 0x74, 0x72,
+//         0x75, 0x6d, 0x53, 0x68, 0x61, 0x72, 0x69, 0x6e,
+//         0x67, 0x05, 0x31, 0x2e, 0x30, 0x2e, 0x30, 0x08,
+//         0x57, 0x69, 0x6e, 0x65, 0x73, 0x4c, 0x61, 0x62
+//     };
+//     E3_PDU_t *dapp_pdu = NULL;
+//     asn_dec_rval_t dapp_dec = aper_decode(NULL, &asn_DEF_E3_PDU,
+//                                           (void**)&dapp_pdu, dapp_data, sizeof(dapp_data), 0, 0);
+//     if (dapp_dec.code != RC_OK) {
+//         std::printf("[SelfTest] FAIL: dApp data APER decode returned code=%d consumed=%zu\n",
+//                     dapp_dec.code, dapp_dec.consumed);
+//         if (dapp_pdu) ASN_STRUCT_FREE(asn_DEF_E3_PDU, dapp_pdu);
+//         return false;
+//     }
+//     std::printf("[SelfTest] dApp data decode OK: id=%ld, msg.present=%d\n",
+//                 dapp_pdu->id, dapp_pdu->msg.present);
+//     ASN_STRUCT_FREE(asn_DEF_E3_PDU, dapp_pdu);
+
+//     std::printf("[SelfTest] PASS: All APER encode/decode tests passed.\n");
+//     return true;
+// }
+
 // ---- Configuration ----
 
 struct E3ManagerConfig {
@@ -228,6 +306,15 @@ int main(int argc, char** argv)
     
     std::cout << "Agent started successfully\n";
     std::cout << "State: " << libe3::agent_state_to_string(agent.state()) << "\n";
+
+    // // Run APER self-test before accepting connections
+    // if (!aper_self_test()) {
+    //     std::fprintf(stderr, "[E3Manager] APER self-test FAILED — aborting.\n");
+    //     agent.stop();
+    //     jbpf_io_stop();
+    //     return 1;
+    // }
+
     std::cout << "Press Ctrl+C to stop...\n\n";
     
     // Main polling loop — the dispatcher routes buffers to registered SMs

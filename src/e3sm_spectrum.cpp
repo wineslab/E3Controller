@@ -1,5 +1,6 @@
 #include "e3sm_spectrum.h"
 #include "e3sm/e3sm_spect_wrapper.h"
+#include "e3sm/bfp_decompress.h"
 
 libe3::ErrorCode E3SMSpectrum::start()
 {
@@ -57,12 +58,26 @@ void E3SMSpectrum::process_buffers(struct jbpf_io_stream_id* stream_id, void** b
         // Why I need to check has subscribers if the sm does not start if I do not have any?
         // Also, I think the library will check to which subscriber send the indication
         if (has_subscribers && sample->symbol_id == 12) {
-            // Build the indication from shared memory data
+            // Decompress BFP 9-bit IQ data to int16 pairs
+            std::vector<int16_t> decompressed;
+            if (!e3sm_spectrum::decompress_bfp_9bit(
+                    sample->iq_payload, sample->payload_size,
+                    sample->num_prbu, decompressed)) {
+                std::fprintf(stderr,
+                    "[E3SMSpectrum] BFP decompression failed for sample #%d "
+                    "(payload=%u, prbs=%u)\n",
+                    total_samples_received_, sample->payload_size, sample->num_prbu);
+                continue;
+            }
+
+            // Build the indication with decompressed int16 I/Q pairs
             e3sm_spectrum::SpectrumIQIndication indication;
             indication.iq_data.assign(
-                sample->iq_payload,
-                sample->iq_payload + sample->payload_size);
-            indication.sample_count = static_cast<uint32_t>(sample->num_prbu) * 12;
+                reinterpret_cast<const uint8_t*>(decompressed.data()),
+                reinterpret_cast<const uint8_t*>(decompressed.data()) +
+                    decompressed.size() * sizeof(int16_t));
+            // sample_count = number of complex I/Q samples (pairs)
+            indication.sample_count = static_cast<uint32_t>(decompressed.size() / 2);
             indication.timestamp = static_cast<uint32_t>(sample->timestamp / 1000000000ULL);
 
             // APER encode
