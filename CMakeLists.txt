@@ -64,6 +64,7 @@ add_executable(e3_manager
   src/e3_manager.cpp
   src/e3sm_spectrum.cpp
   src/e3sm/e3sm_spect_wrapper.cpp
+  src/e3sm/bfp_decompress.cpp
 )
 
 # Include paths: our own headers + jbpf headers
