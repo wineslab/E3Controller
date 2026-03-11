@@ -70,14 +70,37 @@ void E3SMSpectrum::process_buffers(struct jbpf_io_stream_id* stream_id, void** b
                 continue;
             }
 
-            // Build the indication with decompressed int16 I/Q pairs
+            // Zero-pad decompressed IQ to FFT size with correct subcarrier mapping.
+            // The dApp expects fft_size complex samples in FFT-bin order:
+            //   - Lower-freq subcarriers (first half) → upper FFT bins
+            //   - Upper-freq subcarriers (second half) → lower FFT bins
+            //   - Guard band (zeros) in the middle
+            uint32_t ofdm_sym_size = static_cast<uint32_t>(sample->num_prbu) * 12;
+            uint32_t fft_size = 1;
+            while (fft_size < ofdm_sym_size) fft_size <<= 1; // next power of 2
+            uint32_t first_carrier_offset = fft_size - (ofdm_sym_size / 2);
+            uint32_t half_sc = ofdm_sym_size / 2; // half of active subcarriers
+
+            std::vector<int16_t> padded(fft_size * 2, 0); // fft_size complex = fft_size*2 int16s
+
+            // Lower-freq half of subcarriers → upper FFT bins [first_carrier_offset, fft_size)
+            std::memcpy(&padded[first_carrier_offset * 2],
+                        decompressed.data(),
+                        half_sc * 2 * sizeof(int16_t));
+
+            // Upper-freq half of subcarriers → lower FFT bins [0, half_sc)
+            std::memcpy(&padded[0],
+                        &decompressed[half_sc * 2],
+                        half_sc * 2 * sizeof(int16_t));
+
+            // Build the indication with FFT-sized int16 I/Q pairs
             e3sm_spectrum::SpectrumIQIndication indication;
             indication.iq_data.assign(
-                reinterpret_cast<const uint8_t*>(decompressed.data()),
-                reinterpret_cast<const uint8_t*>(decompressed.data()) +
-                    decompressed.size() * sizeof(int16_t));
-            // sample_count = number of complex I/Q samples (pairs)
-            indication.sample_count = static_cast<uint32_t>(decompressed.size() / 2);
+                reinterpret_cast<const uint8_t*>(padded.data()),
+                reinterpret_cast<const uint8_t*>(padded.data()) +
+                    padded.size() * sizeof(int16_t));
+            // sample_count = number of complex I/Q samples (fft_size)
+            indication.sample_count = fft_size;
             indication.timestamp = static_cast<uint32_t>(sample->timestamp / 1000000000ULL);
 
             // APER encode

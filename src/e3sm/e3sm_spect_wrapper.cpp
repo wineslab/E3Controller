@@ -46,8 +46,8 @@ bool encode_spectrum_iq_indication(const SpectrumIQIndication& in, std::vector<u
     }
     *si.timestamp = in.timestamp;
 
-    // APER encode — use a buffer large enough for max payload (16384 + overhead)
-    uint8_t buffer[18000];
+    // APER encode — buffer must hold FFT-padded payload (up to 16384 bytes IQ + overhead)
+    uint8_t buffer[20000];
     asn_enc_rval_t ret = aper_encode_to_buffer(
         &asn_DEF_Spectrum_IQDataIndication, NULL, &si, buffer, sizeof(buffer));
 
