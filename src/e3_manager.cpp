@@ -133,6 +133,7 @@ static void signal_handler(int signo)
 
 struct E3ManagerConfig {
     std::string ipc_name = "e3_manager";
+    std::string run_path = "/dev/shm";
     size_t mem_size = JBPF_HUGEPAGE_SIZE_1GB;
     int poll_interval_us = 100;  // microseconds between polls
 };
@@ -142,6 +143,7 @@ static void print_usage(const char* prog)
     std::printf("Usage: %s [options]\n"
                 "Options:\n"
                 "  --ipc-name <name>     IPC shared memory name (default: e3_manager)\n"
+                "  --run-path <path>     jbpf run path (default: /dev/shm)\n"
                 "  --mem-size <bytes>    Shared memory size in bytes (default: 1GB)\n"
                 "  --poll-interval <us>  Poll interval in microseconds (default: 100)\n"
                 "  --help                Show this help\n",
@@ -154,6 +156,7 @@ static E3ManagerConfig parse_args(int argc, char** argv)
 
     static struct option long_options[] = {
         {"ipc-name",      required_argument, nullptr, 'n'},
+        {"run-path",      required_argument, nullptr, 'r'},
         {"mem-size",      required_argument, nullptr, 'm'},
         {"poll-interval", required_argument, nullptr, 'p'},
         {"help",          no_argument,       nullptr, 'h'},
@@ -161,10 +164,13 @@ static E3ManagerConfig parse_args(int argc, char** argv)
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "n:m:p:h", long_options, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "n:r:m:p:h", long_options, nullptr)) != -1) {
         switch (opt) {
         case 'n':
             config.ipc_name = optarg;
+            break;
+        case 'r':
+            config.run_path = optarg;
             break;
         case 'm':
             config.mem_size = std::strtoull(optarg, nullptr, 0);
@@ -214,6 +220,7 @@ int main(int argc, char** argv)
     std::printf("  E3Manager Codelet Configuration\n");
     std::printf("=============================================\n");
     std::printf("  IPC name:       %s\n", config.ipc_name.c_str());
+    std::printf("  Run path:       %s\n", config.run_path.c_str());
     std::printf("  Memory size:    %zu bytes\n", config.mem_size);
     std::printf("  Poll interval:  %d us\n", config.poll_interval_us);
     std::printf("=============================================\n\n");
@@ -229,7 +236,7 @@ int main(int argc, char** argv)
     struct jbpf_io_config io_config = {};
     io_config.type = JBPF_IO_IPC_PRIMARY;
 
-    std::strncpy(io_config.jbpf_path, JBPF_DEFAULT_RUN_PATH, JBPF_RUN_PATH_LEN - 1);
+    std::strncpy(io_config.jbpf_path, config.run_path.c_str(), JBPF_RUN_PATH_LEN - 1);
     io_config.jbpf_path[JBPF_RUN_PATH_LEN - 1] = '\0';
 
     std::strncpy(io_config.jbpf_namespace, JBPF_DEFAULT_NAMESPACE, JBPF_NAMESPACE_LEN - 1);
