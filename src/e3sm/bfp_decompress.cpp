@@ -66,7 +66,9 @@ bool decompress_bfp_9bit(const uint8_t* data, size_t data_len,
         const uint8_t* prb_data = data + (size_t)prb * BFP_PRB_SIZE;
 
         // First byte: exponent in upper 4 bits, reserved in lower 4
-        uint8_t exponent = (prb_data[0] >> 4) & 0x0F;
+        // uint8_t exponent = (prb_data[0] >> 4) & 0x0F;
+        uint8_t exponent = prb_data[0];
+
 
         // IQ data starts at byte 1 of the PRB block
         const uint8_t* iq_bytes = prb_data + 1;
