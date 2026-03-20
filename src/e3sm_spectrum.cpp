@@ -54,10 +54,13 @@ void E3SMSpectrum::process_buffers(struct jbpf_io_stream_id* stream_id, void** b
                     sample->comp_method,
                     sample->iq_width,
                     sample->payload_size);
-        // TODO: need to be checked
-        // Why I need to check has subscribers if the sm does not start if I do not have any?
-        // Also, I think the library will check to which subscriber send the indication
-        if (has_subscribers && sample->direction == 1 && sample->symbol_id == 12) {
+        if (has_subscribers && sample->direction == 1) {
+            // Skip symbols with unexpected PRB count (e.g., PRACH, SRS, control)
+            if (sample->num_prbu != expected_num_prbu_) {
+                std::printf("[E3SMSpectrum] Skipping sym=%u with %u PRBs (expected %u)\n",
+                            sample->symbol_id, sample->num_prbu, expected_num_prbu_);
+                continue;
+            }
             // Decompress BFP 9-bit IQ data to int16 pairs
             std::vector<int16_t> decompressed;
             if (!e3sm_spectrum::decompress_bfp_9bit(

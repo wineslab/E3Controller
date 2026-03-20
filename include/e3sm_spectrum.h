@@ -18,7 +18,8 @@ extern "C" {
 
 class E3SMSpectrum : public libe3::ServiceModel {
 public:
-    E3SMSpectrum(JbpfDispatcher& dispatcher) : dispatcher_(dispatcher) {};
+    E3SMSpectrum(JbpfDispatcher& dispatcher, uint16_t expected_num_prbu = 106)
+        : dispatcher_(dispatcher), expected_num_prbu_(expected_num_prbu) {};
     static constexpr uint32_t RAN_FUNCTION_ID = 1;
 
     std::string name() const override { return "Spectrum Service Model"; }
@@ -61,6 +62,9 @@ private:
 
     // Dispatcher reference — shared across all SMs
     JbpfDispatcher& dispatcher_;
+
+    // Expected number of PRBs per symbol (used to filter out PRACH/SRS/control symbols)
+    uint16_t expected_num_prbu_;
 
     // Stream ID for the eCPRI I/Q codelet output
     struct jbpf_io_stream_id ecpri_iq_stream_id_ = {

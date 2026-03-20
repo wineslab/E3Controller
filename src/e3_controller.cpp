@@ -136,6 +136,7 @@ struct E3ControllerConfig {
     std::string run_path = "/dev/shm";
     size_t mem_size = JBPF_HUGEPAGE_SIZE_1GB;
     int poll_interval_us = 100;  // microseconds between polls
+    uint16_t num_prbs = 106;     // expected number of PRBs per symbol
 };
 
 static void print_usage(const char* prog)
@@ -146,6 +147,7 @@ static void print_usage(const char* prog)
                 "  --run-path <path>     jbpf run path (default: /dev/shm)\n"
                 "  --mem-size <bytes>    Shared memory size in bytes (default: 1GB)\n"
                 "  --poll-interval <us>  Poll interval in microseconds (default: 100)\n"
+                "  --num-prbs <n>        Expected number of PRBs per symbol (default: 106)\n"
                 "  --help                Show this help\n",
                 prog);
 }
@@ -159,12 +161,13 @@ static E3ControllerConfig parse_args(int argc, char** argv)
         {"run-path",      required_argument, nullptr, 'r'},
         {"mem-size",      required_argument, nullptr, 'm'},
         {"poll-interval", required_argument, nullptr, 'p'},
+        {"num-prbs",      required_argument, nullptr, 'b'},
         {"help",          no_argument,       nullptr, 'h'},
         {nullptr,         0,                 nullptr,  0 }
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "n:r:m:p:h", long_options, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "n:r:m:p:b:h", long_options, nullptr)) != -1) {
         switch (opt) {
         case 'n':
             config.ipc_name = optarg;
@@ -177,6 +180,9 @@ static E3ControllerConfig parse_args(int argc, char** argv)
             break;
         case 'p':
             config.poll_interval_us = std::atoi(optarg);
+            break;
+        case 'b':
+            config.num_prbs = static_cast<uint16_t>(std::atoi(optarg));
             break;
         case 'h':
         default:
@@ -223,6 +229,7 @@ int main(int argc, char** argv)
     std::printf("  Run path:       %s\n", config.run_path.c_str());
     std::printf("  Memory size:    %zu bytes\n", config.mem_size);
     std::printf("  Poll interval:  %d us\n", config.poll_interval_us);
+    std::printf("  Num PRBs:       %u\n", config.num_prbs);
     std::printf("=============================================\n\n");
 
     // Install signal handlers
@@ -278,7 +285,7 @@ int main(int argc, char** argv)
     JbpfDispatcher dispatcher(io_ctx);
     
     // Register service models (each SM registers its stream_ids with the dispatcher)
-    libe3::ErrorCode sm_result = agent.register_sm(std::make_unique<E3SMSpectrum>(dispatcher));
+    libe3::ErrorCode sm_result = agent.register_sm(std::make_unique<E3SMSpectrum>(dispatcher, config.num_prbs));
     if (sm_result != libe3::ErrorCode::SUCCESS) {
         std::cerr << "Failed to register Spectrum SM: "
                   << libe3::error_code_to_string(sm_result) << "\n";

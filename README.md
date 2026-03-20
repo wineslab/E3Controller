@@ -75,15 +75,17 @@ Generated files go into `build/asn1c_generated/` and are **not** tracked in git.
 | Option | Default | Description |
 |---|---|---|
 | `--ipc-name <name>` | `e3_controller` | IPC shared memory segment name |
+| `--run-path <path>` | `/dev/shm` | jbpf run path |
 | `--mem-size <bytes>` | `1073741824` (1GB) | Shared memory size |
 | `--poll-interval <us>` | `100` | Poll interval in microseconds |
+| `--num-prbs <n>` | `106` | Expected number of PRBs per OFDM symbol (used to filter out PRACH/SRS/control symbols with different PRB counts) |
 | `--help` | | Show help |
 
 ### Example
 
 ```bash
-# Terminal 1: Start E3Controller
-./out/bin/e3_controller --ipc-name e3_controller
+# Terminal 1: Start E3Controller (106 PRBs, ~40 MHz BW)
+./out/bin/e3_controller --ipc-name e3_controller --num-prbs 106
 
 # Terminal 2: Start srsRAN with jbpf agent pointing to "e3_controller"
 # Then load the ecpri_iq_samples codelet
