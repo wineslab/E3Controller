@@ -1,7 +1,7 @@
 /*
  * e3_data_handler.h
  *
- * Abstract interface for data handlers in E3Manager.
+ * Abstract interface for data handlers in E3Controller.
  * Each handler processes data from a specific codelet output stream,
  * identified by its jbpf_io_stream_id.
  */

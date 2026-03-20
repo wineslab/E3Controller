@@ -1,7 +1,7 @@
 /*
- * e3_manager.cpp
+ * e3_controller.cpp
  *
- * E3Manager: a standalone daemon that acts as a jbpf IPC primary process
+ * E3Controller: a standalone daemon that acts as a jbpf IPC primary process
  * and an E3 agent. It connects to srsRAN's jbpf shared memory to receive
  * codelet output data, and uses spear-libe3 to expose the data as E3
  * Service Model indications to subscribed dApps.
@@ -12,7 +12,7 @@
  *   - The dispatcher routes buffers to the right SM and releases them
  *
  * Usage:
- *   e3_manager [--ipc-name <name>] [--mem-size <bytes>]
+ *   e3_controller [--ipc-name <name>] [--mem-size <bytes>]
  *
  * The IPC primary must start BEFORE srsRAN (IPC secondary).
  */
@@ -46,7 +46,7 @@ static std::atomic<bool> g_running{true};
 static void signal_handler(int signo)
 {
     if (signo == SIGINT || signo == SIGTERM) {
-        std::printf("\n[E3Manager] Received signal %d, shutting down...\n", signo);
+        std::printf("\n[E3Controller] Received signal %d, shutting down...\n", signo);
         g_running = false;
     }
 }
@@ -131,8 +131,8 @@ static void signal_handler(int signo)
 
 // ---- Configuration ----
 
-struct E3ManagerConfig {
-    std::string ipc_name = "e3_manager";
+struct E3ControllerConfig {
+    std::string ipc_name = "e3_controller";
     std::string run_path = "/dev/shm";
     size_t mem_size = JBPF_HUGEPAGE_SIZE_1GB;
     int poll_interval_us = 100;  // microseconds between polls
@@ -142,7 +142,7 @@ static void print_usage(const char* prog)
 {
     std::printf("Usage: %s [options]\n"
                 "Options:\n"
-                "  --ipc-name <name>     IPC shared memory name (default: e3_manager)\n"
+                "  --ipc-name <name>     IPC shared memory name (default: e3_controller)\n"
                 "  --run-path <path>     jbpf run path (default: /dev/shm)\n"
                 "  --mem-size <bytes>    Shared memory size in bytes (default: 1GB)\n"
                 "  --poll-interval <us>  Poll interval in microseconds (default: 100)\n"
@@ -150,9 +150,9 @@ static void print_usage(const char* prog)
                 prog);
 }
 
-static E3ManagerConfig parse_args(int argc, char** argv)
+static E3ControllerConfig parse_args(int argc, char** argv)
 {
-    E3ManagerConfig config;
+    E3ControllerConfig config;
 
     static struct option long_options[] = {
         {"ipc-name",      required_argument, nullptr, 'n'},
@@ -192,7 +192,7 @@ static E3ManagerConfig parse_args(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
-    E3ManagerConfig config = parse_args(argc, argv);
+    E3ControllerConfig config = parse_args(argc, argv);
 
     // E3 agent configuration
     libe3::E3LinkLayer link_layer = libe3::E3LinkLayer::ZMQ;
@@ -217,7 +217,7 @@ int main(int argc, char** argv)
     libe3::E3Agent agent(std::move(agentConfig));
 
     std::printf("=============================================\n");
-    std::printf("  E3Manager Codelet Configuration\n");
+    std::printf("  E3Controller Codelet Configuration\n");
     std::printf("=============================================\n");
     std::printf("  IPC name:       %s\n", config.ipc_name.c_str());
     std::printf("  Run path:       %s\n", config.run_path.c_str());
@@ -228,7 +228,7 @@ int main(int argc, char** argv)
     // Install signal handlers
     if (signal(SIGINT, signal_handler) == SIG_ERR ||
         signal(SIGTERM, signal_handler) == SIG_ERR) {
-        std::perror("[E3Manager] Failed to install signal handlers");
+        std::perror("[E3Controller] Failed to install signal handlers");
         return 1;
     }
 
@@ -249,18 +249,18 @@ int main(int argc, char** argv)
 
     io_config.ipc_config.mem_cfg.memory_size = config.mem_size;
 
-    std::printf("[E3Manager] Initializing jbpf IO (IPC primary)...\n");
+    std::printf("[E3Controller] Initializing jbpf IO (IPC primary)...\n");
     auto* io_ctx = jbpf_io_init(&io_config);
     if (!io_ctx) {
-        std::fprintf(stderr, "[E3Manager] ERROR: Failed to initialize jbpf IO.\n"
+        std::fprintf(stderr, "[E3Controller] ERROR: Failed to initialize jbpf IO.\n"
                              "  Make sure no other IPC primary is running with the same name.\n");
         return 1;
     }
-    std::printf("[E3Manager] jbpf IO initialized successfully.\n");
+    std::printf("[E3Controller] jbpf IO initialized successfully.\n");
 
     // Register this thread for jbpf IO operations
     if (!jbpf_io_register_thread()) {
-        std::fprintf(stderr, "[E3Manager] ERROR: Failed to register IO thread.\n");
+        std::fprintf(stderr, "[E3Controller] ERROR: Failed to register IO thread.\n");
         jbpf_io_stop();
         return 1;
     }
@@ -299,7 +299,7 @@ int main(int argc, char** argv)
                            << libe3::error_code_to_string(rc) << "\n";
                  return 1;
              }
-             std::printf("[E3Manager] Spectrum SM started eagerly (test mode).\n");
+             std::printf("[E3Controller] Spectrum SM started eagerly (test mode).\n");
          }
      }*/
 
@@ -316,7 +316,7 @@ int main(int argc, char** argv)
 
     // // Run APER self-test before accepting connections
     // if (!aper_self_test()) {
-    //     std::fprintf(stderr, "[E3Manager] APER self-test FAILED — aborting.\n");
+    //     std::fprintf(stderr, "[E3Controller] APER self-test FAILED — aborting.\n");
     //     agent.stop();
     //     jbpf_io_stop();
     //     return 1;
@@ -335,9 +335,9 @@ int main(int argc, char** argv)
 
     // Cleanup
     agent.stop();
-    std::printf("[E3Manager] Shutting down...\n");
+    std::printf("[E3Controller] Shutting down...\n");
     jbpf_io_stop();
-    std::printf("[E3Manager] Stopped.\n");
+    std::printf("[E3Controller] Stopped.\n");
 
     return 0;
 }

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(e3_manager CXX C)
+project(e3_controller CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,16 +59,16 @@ FetchContent_MakeAvailable(tl_expected)
 # Requires libe3 to be installed: cd ../spear-libe3/build && sudo make install
 find_package(libe3 REQUIRED)
 
-# ---- E3Manager executable ----
-add_executable(e3_manager
-  src/e3_manager.cpp
+# ---- E3Controller executable ----
+add_executable(e3_controller
+  src/e3_controller.cpp
   src/e3sm_spectrum.cpp
   src/e3sm/e3sm_spect_wrapper.cpp
   src/e3sm/bfp_decompress.cpp
 )
 
 # Include paths: our own headers + jbpf headers
-target_include_directories(e3_manager PRIVATE
+target_include_directories(e3_controller PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/jbpf/src/io
@@ -79,7 +79,7 @@ target_include_directories(e3_manager PRIVATE
 )
 
 # Link against jbpf_io (transitively brings mem_mgmt, logger, ck, mimalloc)
-target_link_libraries(e3_manager PRIVATE
+target_link_libraries(e3_controller PRIVATE
   jbpf::io_lib
   e3sm_asn
   libe3::libe3
@@ -89,6 +89,6 @@ target_link_libraries(e3_manager PRIVATE
 )
 
 # Output the binary to out/bin/
-set_target_properties(e3_manager PROPERTIES
+set_target_properties(e3_controller PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${OUTPUT_DIR}/bin"
 )

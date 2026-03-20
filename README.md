@@ -1,4 +1,4 @@
-# E3Manager
+# E3Controller
 
 A standalone C++ daemon that bridges srsRAN's jbpf shared memory (IPC primary) with the E3 protocol via [spear-libe3](https://github.com/wineslab/spear-libe3). It receives I/Q sample data from jbpf codelets and exposes it as E3 Service Model indications to subscribed dApps.
 
@@ -41,7 +41,7 @@ sudo make install
 ```bash
 # Clone with submodules
 git clone --recurse-submodules <repo-url>
-cd E3Manager
+cd E3Controller
 
 # Initialize jbpf submodules (only needed once)
 cd jbpf && bash ./init_and_patch_submodules.sh && cd ..
@@ -49,32 +49,32 @@ cd jbpf && bash ./init_and_patch_submodules.sh && cd ..
 # Build
 mkdir -p build && cd build
 cmake .. -DINITIALIZE_SUBMODULES=OFF
-make -j$(nproc) e3_manager
+make -j$(nproc) e3_controller
 ```
 
-The binary is output to `out/bin/e3_manager`.
+The binary is output to `out/bin/e3_controller`.
 
 ### ASN.1 Code Generation
 
 The build automatically:
 1. Runs `asn1c` on `src/e3sm/asn/e3sm_spectrum.asn` to generate C encoder/decoder code
-2. Compiles the generated code into a static library (`e3sm_asn`) linked to `e3_manager`
+2. Compiles the generated code into a static library (`e3sm_asn`) linked to `e3_controller`
 
 Generated files go into `build/asn1c_generated/` and are **not** tracked in git.
 
 ## Usage
 
-> **Important:** E3Manager (IPC primary) must start **before** srsRAN (IPC secondary).
+> **Important:** E3Controller (IPC primary) must start **before** srsRAN (IPC secondary).
 
 ```bash
-./out/bin/e3_manager [options]
+./out/bin/e3_controller [options]
 ```
 
 ### Options
 
 | Option | Default | Description |
 |---|---|---|
-| `--ipc-name <name>` | `e3_manager` | IPC shared memory segment name |
+| `--ipc-name <name>` | `e3_controller` | IPC shared memory segment name |
 | `--mem-size <bytes>` | `1073741824` (1GB) | Shared memory size |
 | `--poll-interval <us>` | `100` | Poll interval in microseconds |
 | `--help` | | Show help |
@@ -82,17 +82,17 @@ Generated files go into `build/asn1c_generated/` and are **not** tracked in git.
 ### Example
 
 ```bash
-# Terminal 1: Start E3Manager
-./out/bin/e3_manager --ipc-name e3_manager
+# Terminal 1: Start E3Controller
+./out/bin/e3_controller --ipc-name e3_controller
 
-# Terminal 2: Start srsRAN with jbpf agent pointing to "e3_manager"
+# Terminal 2: Start srsRAN with jbpf agent pointing to "e3_controller"
 # Then load the ecpri_iq_samples codelet
 ```
 
 ## Architecture
 
 ```
-srsRAN + jbpf (IPC Secondary)  ──shared memory──►  E3Manager (IPC Primary)
+srsRAN + jbpf (IPC Secondary)  ──shared memory──►  E3Controller (IPC Primary)
                                                         │
                                                     JbpfDispatcher
                                                    (single poll loop)
@@ -125,7 +125,7 @@ The `JbpfDispatcher` is the central routing component:
    ```
 3. In `stop()`, unregister: `dispatcher_.unregister_stream(my_stream_id_);`
 4. Add ASN.1 types + encoding wrappers for your SM's messages
-5. Register in `e3_manager.cpp`:
+5. Register in `e3_controller.cpp`:
    ```cpp
    agent.register_sm(std::make_unique<MyNewSM>(dispatcher));
    ```
@@ -136,7 +136,7 @@ The `JbpfDispatcher` is the central routing component:
 
 | File | Description |
 |---|---|
-| `src/e3_manager.cpp` | Main daemon — jbpf IO init, E3 agent, dispatcher poll loop |
+| `src/e3_controller.cpp` | Main daemon — jbpf IO init, E3 agent, dispatcher poll loop |
 | `include/jbpf_dispatcher.h` | Central buffer dispatcher — routes by stream_id, releases buffers |
 | `src/e3sm_spectrum.cpp` | Spectrum SM — APER-encodes I/Q data and emits to subscribers |
 | `include/e3sm_spectrum.h` | Spectrum SM class (extends `libe3::ServiceModel`) |
