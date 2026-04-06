@@ -76,11 +76,13 @@ target_include_directories(e3_controller PRIVATE
   ${CMAKE_SOURCE_DIR}/jbpf/src/logger
   ${CMAKE_SOURCE_DIR}/jbpf/src/common
   ${OUTPUT_DIR}/inc
+  ${CMAKE_SOURCE_DIR}/jbpf/src/lcm
 )
 
 # Link against jbpf_io (transitively brings mem_mgmt, logger, ck, mimalloc)
 target_link_libraries(e3_controller PRIVATE
   jbpf::io_lib
+  jbpf::lcm_ipc_lib
   e3sm_asn
   libe3::libe3
   pthread

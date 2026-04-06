@@ -13,13 +13,18 @@ extern "C" {
 #include "jbpf_io_channel.h"
 #include "jbpf_common.h"
 #include "jbpf_mem_mgmt.h"
+#include "jbpf_lcm_ipc.h"
 }
 
 
 class E3SMSpectrum : public libe3::ServiceModel {
 public:
-    E3SMSpectrum(JbpfDispatcher& dispatcher, uint16_t expected_num_prbu = 106)
-        : dispatcher_(dispatcher), expected_num_prbu_(expected_num_prbu) {};
+    E3SMSpectrum(JbpfDispatcher& dispatcher, uint16_t expected_num_prbu = 106,
+                 std::string lcm_socket_path = "/tmp/jbpf/jbpf_lcm_ipc",
+                 std::string codelet_base_path = "")
+        : dispatcher_(dispatcher), expected_num_prbu_(expected_num_prbu),
+          lcm_socket_path_(std::move(lcm_socket_path)),
+          codelet_base_path_(std::move(codelet_base_path)) {};
     static constexpr uint32_t RAN_FUNCTION_ID = 1;
 
     std::string name() const override { return "Spectrum Service Model"; }
@@ -59,6 +64,7 @@ private:
     uint32_t seq_{0};
     int total_samples_received_{0};
     std::atomic<bool> running_{false};
+    bool codelets_loaded_{false};
 
     // Dispatcher reference — shared across all SMs
     JbpfDispatcher& dispatcher_;
@@ -66,11 +72,19 @@ private:
     // Expected number of PRBs per symbol (used to filter out PRACH/SRS/control symbols)
     uint16_t expected_num_prbu_;
 
+    // LCM IPC configuration for dynamic codelet loading
+    std::string lcm_socket_path_;
+    std::string codelet_base_path_;
+
     // Stream ID for the eCPRI I/Q codelet output
     struct jbpf_io_stream_id ecpri_iq_stream_id_ = {
         .id = {0xF1, 0xF2, 0x29, 0x0F, 0xD2, 0x68, 0x5D, 0x17,
                0xEC, 0xC9, 0x90, 0x2C, 0x4C, 0x9F, 0x05, 0xFE}
     };
+
+    // Dynamic codelet loading/unloading via jbpf LCM IPC
+    bool load_codelets();
+    void unload_codelets();
 
     // Process buffers routed by the dispatcher
     void process_buffers(struct jbpf_io_stream_id* stream_id, void** bufs, int num_bufs);

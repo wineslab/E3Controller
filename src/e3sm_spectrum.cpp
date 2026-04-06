@@ -2,10 +2,74 @@
 #include "e3sm/e3sm_spect_wrapper.h"
 #include "e3sm/bfp_decompress.h"
 
+bool E3SMSpectrum::load_codelets()
+{
+    jbpf_lcm_ipc_address_t address = {};
+    std::strncpy(address.path, lcm_socket_path_.c_str(), JBPF_LCM_IPC_ADDRESS_LEN - 1);
+
+    jbpf_codeletset_load_req_s load_req = {};
+
+    // Codeletset identity
+    std::strncpy(load_req.codeletset_id.name, "ecpri_iq_samples", JBPF_CODELETSET_NAME_LEN - 1);
+
+    // Single codelet: ecpri_iq_collect on the capture_xran_packet hook
+    load_req.num_codelet_descriptors = 1;
+    auto& desc = load_req.codelet_descriptor[0];
+
+    std::strncpy(desc.codelet_name, "collector", JBPF_CODELET_NAME_LEN - 1);
+    std::strncpy(desc.hook_name, "capture_xran_packet", sizeof(desc.hook_name) - 1);
+
+    std::string full_path = codelet_base_path_ + "/ecpri_iq_samples/ecpri_iq_collect.o";
+    std::strncpy(desc.codelet_path, full_path.c_str(), JBPF_PATH_LEN - 1);
+
+    desc.priority = 1;
+    desc.runtime_threshold = 0;
+    desc.num_in_io_channel = 0;
+    desc.num_linked_maps = 0;
+
+    // Output channel: stream_id must match ecpri_iq_stream_id_ so the dispatcher routes to us
+    desc.num_out_io_channel = 1;
+    std::strncpy(desc.out_io_channel[0].name, "output_map", sizeof(desc.out_io_channel[0].name) - 1);
+    std::memcpy(&desc.out_io_channel[0].stream_id, &ecpri_iq_stream_id_, sizeof(jbpf_io_stream_id_t));
+    desc.out_io_channel[0].has_serde = false;
+
+    int rc = jbpf_lcm_ipc_send_codeletset_load_req(&address, &load_req);
+    if (rc != 0) {
+        std::fprintf(stderr, "[E3SMSpectrum] Failed to load codeletset 'ecpri_iq_samples' via LCM IPC (rc=%d)\n", rc);
+        return false;
+    }
+    std::printf("[E3SMSpectrum] Codeletset 'ecpri_iq_samples' loaded successfully\n");
+    return true;
+}
+
+void E3SMSpectrum::unload_codelets()
+{
+    jbpf_lcm_ipc_address_t address = {};
+    std::strncpy(address.path, lcm_socket_path_.c_str(), JBPF_LCM_IPC_ADDRESS_LEN - 1);
+
+    jbpf_codeletset_unload_req_s unload_req = {};
+    std::strncpy(unload_req.codeletset_id.name, "ecpri_iq_samples", JBPF_CODELETSET_NAME_LEN - 1);
+
+    int rc = jbpf_lcm_ipc_send_codeletset_unload_req(&address, &unload_req);
+    if (rc != 0) {
+        std::fprintf(stderr, "[E3SMSpectrum] Failed to unload codeletset 'ecpri_iq_samples' (rc=%d)\n", rc);
+    } else {
+        std::printf("[E3SMSpectrum] Codeletset 'ecpri_iq_samples' unloaded successfully\n");
+    }
+}
+
 libe3::ErrorCode E3SMSpectrum::start()
 {
     if (running_) {
         return libe3::ErrorCode::SUCCESS;
+    }
+
+    // Load codelets into srsRAN if a codelet path was configured
+    if (!codelet_base_path_.empty()) {
+        if (!load_codelets()) {
+            return libe3::ErrorCode::INTERNAL_ERROR;
+        }
+        codelets_loaded_ = true;
     }
 
     // Register our stream with the central dispatcher.
@@ -135,6 +199,12 @@ void E3SMSpectrum::stop() {
     // Unregister from the dispatcher so we stop receiving buffers
     dispatcher_.unregister_stream(ecpri_iq_stream_id_);
     running_ = false;
+
+    // Unload codelets from srsRAN
+    if (codelets_loaded_) {
+        unload_codelets();
+        codelets_loaded_ = false;
+    }
 }
 
 libe3::ErrorCode E3SMSpectrum::handle_control_action(

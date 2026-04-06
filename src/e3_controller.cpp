@@ -137,6 +137,8 @@ struct E3ControllerConfig {
     size_t mem_size = JBPF_HUGEPAGE_SIZE_1GB;
     int poll_interval_us = 100;  // microseconds between polls
     uint16_t num_prbs = 106;     // expected number of PRBs per symbol
+    std::string lcm_socket_path = "/tmp/jbpf/jbpf_lcm_ipc";  // LCM IPC socket for codelet loading
+    std::string codelet_base_path;  // base dir for codelet binaries (empty = no auto-loading)
 };
 
 static void print_usage(const char* prog)
@@ -148,6 +150,8 @@ static void print_usage(const char* prog)
                 "  --mem-size <bytes>    Shared memory size in bytes (default: 1GB)\n"
                 "  --poll-interval <us>  Poll interval in microseconds (default: 100)\n"
                 "  --num-prbs <n>        Expected number of PRBs per symbol (default: 106)\n"
+                "  --lcm-socket <path>   LCM IPC socket path for codelet loading (default: /tmp/jbpf/jbpf_lcm_ipc)\n"
+                "  --codelet-path <dir>  Base directory for codelet binaries (enables auto-loading)\n"
                 "  --help                Show this help\n",
                 prog);
 }
@@ -162,12 +166,14 @@ static E3ControllerConfig parse_args(int argc, char** argv)
         {"mem-size",      required_argument, nullptr, 'm'},
         {"poll-interval", required_argument, nullptr, 'p'},
         {"num-prbs",      required_argument, nullptr, 'b'},
+        {"lcm-socket",    required_argument, nullptr, 'l'},
+        {"codelet-path",  required_argument, nullptr, 'c'},
         {"help",          no_argument,       nullptr, 'h'},
         {nullptr,         0,                 nullptr,  0 }
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "n:r:m:p:b:h", long_options, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "n:r:m:p:b:l:c:h", long_options, nullptr)) != -1) {
         switch (opt) {
         case 'n':
             config.ipc_name = optarg;
@@ -183,6 +189,12 @@ static E3ControllerConfig parse_args(int argc, char** argv)
             break;
         case 'b':
             config.num_prbs = static_cast<uint16_t>(std::atoi(optarg));
+            break;
+        case 'l':
+            config.lcm_socket_path = optarg;
+            break;
+        case 'c':
+            config.codelet_base_path = optarg;
             break;
         case 'h':
         default:
@@ -230,6 +242,9 @@ int main(int argc, char** argv)
     std::printf("  Memory size:    %zu bytes\n", config.mem_size);
     std::printf("  Poll interval:  %d us\n", config.poll_interval_us);
     std::printf("  Num PRBs:       %u\n", config.num_prbs);
+    std::printf("  LCM socket:     %s\n", config.lcm_socket_path.c_str());
+    std::printf("  Codelet path:   %s\n",
+                config.codelet_base_path.empty() ? "(none — auto-loading disabled)" : config.codelet_base_path.c_str());
     std::printf("=============================================\n\n");
 
     // Install signal handlers
@@ -285,7 +300,8 @@ int main(int argc, char** argv)
     JbpfDispatcher dispatcher(io_ctx);
     
     // Register service models (each SM registers its stream_ids with the dispatcher)
-    libe3::ErrorCode sm_result = agent.register_sm(std::make_unique<E3SMSpectrum>(dispatcher, config.num_prbs));
+    libe3::ErrorCode sm_result = agent.register_sm(std::make_unique<E3SMSpectrum>(
+        dispatcher, config.num_prbs, config.lcm_socket_path, config.codelet_base_path));
     if (sm_result != libe3::ErrorCode::SUCCESS) {
         std::cerr << "Failed to register Spectrum SM: "
                   << libe3::error_code_to_string(sm_result) << "\n";
