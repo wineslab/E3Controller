@@ -301,7 +301,7 @@ int main(int argc, char** argv)
     
     // Register service models (each SM registers its stream_ids with the dispatcher)
     libe3::ErrorCode sm_result = agent.register_sm(std::make_unique<E3SMSpectrum>(
-        dispatcher, config.num_prbs, config.lcm_socket_path, config.codelet_base_path));
+        dispatcher, io_ctx, config.num_prbs, config.lcm_socket_path, config.codelet_base_path));
     if (sm_result != libe3::ErrorCode::SUCCESS) {
         std::cerr << "Failed to register Spectrum SM: "
                   << libe3::error_code_to_string(sm_result) << "\n";

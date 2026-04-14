@@ -24,7 +24,11 @@ bool E3SMSpectrum::load_codelets()
 
     desc.priority = 1;
     desc.runtime_threshold = 0;
-    desc.num_in_io_channel = 0;
+    desc.num_in_io_channel = 1;
+    std::strncpy(desc.in_io_channel[0].name, "prb_config_map", sizeof(desc.in_io_channel[0].name) - 1);
+    std::memcpy(&desc.in_io_channel[0].stream_id, &prb_config_stream_id_, sizeof(jbpf_io_stream_id_t));
+    desc.in_io_channel[0].has_serde = false;
+
     desc.num_linked_maps = 0;
 
     // Output channel: stream_id must match ecpri_iq_stream_id_ so the dispatcher routes to us
@@ -70,6 +74,17 @@ libe3::ErrorCode E3SMSpectrum::start()
             return libe3::ErrorCode::INTERNAL_ERROR;
         }
         codelets_loaded_ = true;
+
+        // Send PRB filter configuration to the codelet via control input
+        struct prb_filter_config cfg = {};
+        cfg.expected_num_prbu = expected_num_prbu_;
+        int rc = jbpf_io_channel_send_msg(io_ctx_, &prb_config_stream_id_, &cfg, sizeof(cfg));
+        if (rc != 0) {
+            std::fprintf(stderr, "[E3SMSpectrum] Failed to send PRB config to codelet (rc=%d)\n", rc);
+        } else {
+            std::printf("[E3SMSpectrum] Sent PRB filter config: expected_num_prbu=%u\n",
+                        cfg.expected_num_prbu);
+        }
     }
 
     // Register our stream with the central dispatcher.
@@ -119,12 +134,7 @@ void E3SMSpectrum::process_buffers(struct jbpf_io_stream_id* stream_id, void** b
                     sample->iq_width,
                     sample->payload_size);
         if (has_subscribers && sample->direction == 1) {
-            // Skip symbols with unexpected PRB count (e.g., PRACH, SRS, control)
-            if (sample->num_prbu != expected_num_prbu_) {
-                std::printf("[E3SMSpectrum] Skipping sym=%u with %u PRBs (expected %u)\n",
-                            sample->symbol_id, sample->num_prbu, expected_num_prbu_);
-                continue;
-            }
+            // PRB filtering is now done in the codelet — all samples here have matching PRB count
             // Decompress BFP 9-bit IQ data to int16 pairs
             std::vector<int16_t> decompressed;
             if (!e3sm_spectrum::decompress_bfp_9bit(
