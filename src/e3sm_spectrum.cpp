@@ -1,6 +1,7 @@
 #include "e3sm_spectrum.h"
 #include "e3sm/e3sm_spect_wrapper.h"
 #include "e3sm/bfp_decompress.h"
+#include <unistd.h>
 
 bool E3SMSpectrum::load_codelets()
 {
@@ -99,7 +100,9 @@ std::vector<uint8_t> E3SMSpectrum::ran_function_data() const {
 }
 
 void E3SMSpectrum::process_buffers(struct jbpf_io_stream_id* stream_id, void** bufs, int num_bufs) {
-    // Send PRB filter config on first buffer arrival (channels are guaranteed live by now)
+    // Send PRB filter config on first buffer arrival.
+    // Must be done here (dispatcher poll thread) — not from start() (subscriber thread),
+    // because jbpf_io_channel_send_msg requires the same thread context as the io_ctx owner.
     if (!prb_config_sent_) {
         struct prb_filter_config cfg = {};
         cfg.expected_num_prbu = expected_num_prbu_;

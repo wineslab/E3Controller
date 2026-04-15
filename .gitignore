@@ -4,4 +4,3 @@ build/
 # ASN.1 generated code (produced by asn1c during build)
 asn1c_generated/
 
-codelets/

@@ -1,0 +1,12 @@
+codeletset_id: ecpri_iq_samples
+
+codelet_descriptor:
+
+  - codelet_name: collector
+    codelet_path: ${JBPF_CODELETS}/ecpri_iq_samples/ecpri_iq_collect.o
+    hook_name: capture_xran_packet
+    priority: 1
+    out_io_channel:
+      - name: output_map
+        stream_id: "f1f2290fd2685d17ecc9902c4c9f05fe"
+        forward_destination: DestinationNone
