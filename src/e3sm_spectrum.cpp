@@ -74,17 +74,6 @@ libe3::ErrorCode E3SMSpectrum::start()
             return libe3::ErrorCode::INTERNAL_ERROR;
         }
         codelets_loaded_ = true;
-
-        // Send PRB filter configuration to the codelet via control input
-        struct prb_filter_config cfg = {};
-        cfg.expected_num_prbu = expected_num_prbu_;
-        int rc = jbpf_io_channel_send_msg(io_ctx_, &prb_config_stream_id_, &cfg, sizeof(cfg));
-        if (rc != 0) {
-            std::fprintf(stderr, "[E3SMSpectrum] Failed to send PRB config to codelet (rc=%d)\n", rc);
-        } else {
-            std::printf("[E3SMSpectrum] Sent PRB filter config: expected_num_prbu=%u\n",
-                        cfg.expected_num_prbu);
-        }
     }
 
     // Register our stream with the central dispatcher.
@@ -110,6 +99,20 @@ std::vector<uint8_t> E3SMSpectrum::ran_function_data() const {
 }
 
 void E3SMSpectrum::process_buffers(struct jbpf_io_stream_id* stream_id, void** bufs, int num_bufs) {
+    // Send PRB filter config on first buffer arrival (channels are guaranteed live by now)
+    if (!prb_config_sent_) {
+        struct prb_filter_config cfg = {};
+        cfg.expected_num_prbu = expected_num_prbu_;
+        int rc = jbpf_io_channel_send_msg(io_ctx_, &prb_config_stream_id_, &cfg, sizeof(cfg));
+        if (rc == 0) {
+            std::printf("[E3SMSpectrum] Sent PRB filter config: expected_num_prbu=%u\n",
+                        cfg.expected_num_prbu);
+            prb_config_sent_ = true;
+        } else {
+            std::fprintf(stderr, "[E3SMSpectrum] Failed to send PRB config (rc=%d), will retry\n", rc);
+        }
+    }
+
     // Check for subscribers once per batch
     auto subscribers = get_subscribers();
     bool has_subscribers = !subscribers.empty();

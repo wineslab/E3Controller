@@ -67,6 +67,7 @@ private:
     int total_samples_received_{0};
     std::atomic<bool> running_{false};
     bool codelets_loaded_{false};
+    bool prb_config_sent_{false};
 
     // Dispatcher reference — shared across all SMs
     JbpfDispatcher& dispatcher_;
