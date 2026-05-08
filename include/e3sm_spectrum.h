@@ -5,6 +5,9 @@
 #include <libe3/libe3.hpp>
 #include <iostream>
 #include <cstring>
+#include <atomic>
+#include <thread>
+#include <vector>
 #include "e3sm/e3sm_spect_wrapper.h"
 #include "jbpf_dispatcher.h"
 
@@ -22,11 +25,14 @@ public:
     E3SMSpectrum(JbpfDispatcher& dispatcher, jbpf_io_ctx* io_ctx,
                  uint16_t expected_num_prbu = 106,
                  std::string lcm_socket_path = "/tmp/jbpf/jbpf_lcm_ipc",
-                 std::string codelet_base_path = "")
+                 std::string codelet_base_path = "",
+                 int worker_core = -1)
         : dispatcher_(dispatcher), io_ctx_(io_ctx),
           expected_num_prbu_(expected_num_prbu),
           lcm_socket_path_(std::move(lcm_socket_path)),
-          codelet_base_path_(std::move(codelet_base_path)) {};
+          codelet_base_path_(std::move(codelet_base_path)),
+          worker_core_(worker_core),
+          queue_(QUEUE_CAPACITY) {};
     static constexpr uint32_t RAN_FUNCTION_ID = 1;
 
     std::string name() const override { return "Spectrum Service Model"; }
@@ -63,6 +69,14 @@ public:
    
 
 private:
+    static constexpr size_t QUEUE_CAPACITY = 256;  // power of 2
+
+    struct QueueEntry {
+        struct iq_sample_data sample;
+        uint32_t recv_us;        // codelet→controller latency captured at enqueue time
+        uint32_t sample_id;      // monotonic id for the statistics log
+    };
+
     uint32_t seq_{0};
     int total_samples_received_{0};
     std::atomic<bool> running_{false};
@@ -82,6 +96,24 @@ private:
     std::string lcm_socket_path_;
     std::string codelet_base_path_;
 
+    // Worker thread (decompress / fft / encode / emit) — runs on its own core.
+    int worker_core_;
+    std::thread worker_;
+
+    // SPSC ring between poll thread (producer) and worker thread (consumer).
+    // head_ = next write idx, tail_ = next read idx. Both monotonic; wrap via mask.
+    // Cache-line aligned to avoid false sharing between producer and consumer.
+    alignas(64) std::atomic<uint64_t> queue_head_{0};
+    alignas(64) std::atomic<uint64_t> queue_tail_{0};
+    std::vector<QueueEntry> queue_;
+    std::atomic<uint64_t> dropped_{0};
+
+    // Pre-allocated processing buffers (worker thread only — no synchronization needed).
+    std::vector<int16_t> decompressed_buf_;
+    std::vector<int16_t> padded_buf_;
+    std::vector<uint8_t> encoded_buf_;
+    e3sm_spectrum::SpectrumIQIndication indication_;
+
     // Stream ID for the eCPRI I/Q codelet output
     struct jbpf_io_stream_id ecpri_iq_stream_id_ = {
         .id = {0xF1, 0xF2, 0x29, 0x0F, 0xD2, 0x68, 0x5D, 0x17,
@@ -98,8 +130,14 @@ private:
     bool load_codelets();
     void unload_codelets();
 
-    // Process buffers routed by the dispatcher
+    // Poll-thread side: dispatcher callback. Filters, captures recv_us, enqueues.
     void process_buffers(struct jbpf_io_stream_id* stream_id, void** bufs, int num_bufs);
+
+    // Worker-thread loop: drains the SPSC queue and runs process_sample().
+    void worker_loop();
+
+    // Worker-thread per-sample work: decompress, fft padding, encode, emit, log.
+    void process_sample(const QueueEntry& entry);
 };
 
 #endif /* E3_SM_SPECTRUM_H */

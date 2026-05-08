@@ -22,9 +22,15 @@
 #include <csignal>
 #include <cstring>
 #include <cstdlib>
+#include <cerrno>
 #include <unistd.h>
 #include <getopt.h>
 #include <atomic>
+#include <pthread.h>
+#include <sched.h>
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#endif
 #include <libe3/libe3.hpp>
 
 extern "C" {
@@ -135,7 +141,10 @@ struct E3ControllerConfig {
     std::string ipc_name = "e3_controller";
     std::string run_path = "/dev/shm";
     size_t mem_size = JBPF_HUGEPAGE_SIZE_1GB;
-    int poll_interval_us = 100;  // microseconds between polls
+    int poll_interval_us = 100;  // microseconds between polls (ignored when poll_core >= 0)
+    int poll_core = -1;          // CPU to pin the polling thread to (-1 = no pinning, sleep-based)
+    int worker_core = -1;        // CPU to pin the SM worker thread to (-1 = no pinning)
+    int publisher_core = -1;     // CPU to pin libe3's publisher_thread_ to (-1 = no pinning)
     uint16_t num_prbs = 106;     // expected number of PRBs per symbol
     std::string lcm_socket_path = "/tmp/jbpf/jbpf_lcm_ipc";  // LCM IPC socket for codelet loading
     std::string codelet_base_path;  // base dir for codelet binaries (empty = no auto-loading)
@@ -148,7 +157,10 @@ static void print_usage(const char* prog)
                 "  --ipc-name <name>     IPC shared memory name (default: e3_controller)\n"
                 "  --run-path <path>     jbpf run path (default: /dev/shm)\n"
                 "  --mem-size <bytes>    Shared memory size in bytes (default: 1GB)\n"
-                "  --poll-interval <us>  Poll interval in microseconds (default: 100)\n"
+                "  --poll-interval <us>  Poll interval in microseconds (default: 100; ignored if --poll-core is set)\n"
+                "  --poll-core <cpu>     Pin the polling thread to <cpu> and busy-poll (default: -1, no pinning)\n"
+                "  --worker-core <cpu>   Pin the SM worker (decompress/encode/emit) to <cpu> (default: -1, no pinning)\n"
+                "  --publisher-core <cpu> Pin libe3's publisher thread (outer encode + ZMQ send) to <cpu> (default: -1, no pinning)\n"
                 "  --num-prbs <n>        Expected number of PRBs per symbol (default: 106)\n"
                 "  --lcm-socket <path>   LCM IPC socket path for codelet loading (default: /tmp/jbpf/jbpf_lcm_ipc)\n"
                 "  --codelet-path <dir>  Base directory for codelet binaries (enables auto-loading)\n"
@@ -165,6 +177,9 @@ static E3ControllerConfig parse_args(int argc, char** argv)
         {"run-path",      required_argument, nullptr, 'r'},
         {"mem-size",      required_argument, nullptr, 'm'},
         {"poll-interval", required_argument, nullptr, 'p'},
+        {"poll-core",     required_argument, nullptr, 'C'},
+        {"worker-core",   required_argument, nullptr, 'W'},
+        {"publisher-core",required_argument, nullptr, 'P'},
         {"num-prbs",      required_argument, nullptr, 'b'},
         {"lcm-socket",    required_argument, nullptr, 'l'},
         {"codelet-path",  required_argument, nullptr, 'c'},
@@ -173,7 +188,7 @@ static E3ControllerConfig parse_args(int argc, char** argv)
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "n:r:m:p:b:l:c:h", long_options, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "n:r:m:p:C:W:P:b:l:c:h", long_options, nullptr)) != -1) {
         switch (opt) {
         case 'n':
             config.ipc_name = optarg;
@@ -186,6 +201,15 @@ static E3ControllerConfig parse_args(int argc, char** argv)
             break;
         case 'p':
             config.poll_interval_us = std::atoi(optarg);
+            break;
+        case 'C':
+            config.poll_core = std::atoi(optarg);
+            break;
+        case 'W':
+            config.worker_core = std::atoi(optarg);
+            break;
+        case 'P':
+            config.publisher_core = std::atoi(optarg);
             break;
         case 'b':
             config.num_prbs = static_cast<uint16_t>(std::atoi(optarg));
@@ -224,6 +248,13 @@ int main(int argc, char** argv)
     agentConfig.transport_layer = transport_layer;
     agentConfig.encoding = encoding;
     agentConfig.log_level = 4;
+    // Pin libe3's I/O threads (publisher_thread_ in particular — it does the
+    // outer APER encode + zmq_send) to a dedicated core if requested. Without
+    // this the publisher gets scheduled out under load and queue_us in
+    // libe3_pub_stages.log climbs into hundreds of µs.
+    if (config.publisher_core >= 0) {
+        agentConfig.io_thread_affinity = config.publisher_core;
+    }
     
     std::cout << "=============================================\n";
     std::cout << "E3 Agent Configuration:\n"
@@ -240,7 +271,14 @@ int main(int argc, char** argv)
     std::printf("  IPC name:       %s\n", config.ipc_name.c_str());
     std::printf("  Run path:       %s\n", config.run_path.c_str());
     std::printf("  Memory size:    %zu bytes\n", config.mem_size);
-    std::printf("  Poll interval:  %d us\n", config.poll_interval_us);
+    std::printf("  Poll interval:  %d us%s\n", config.poll_interval_us,
+                config.poll_core >= 0 ? " (ignored — busy poll on dedicated core)" : "");
+    std::printf("  Poll core:      %s\n",
+                config.poll_core >= 0 ? std::to_string(config.poll_core).c_str() : "(none — sleep-based)");
+    std::printf("  Worker core:    %s\n",
+                config.worker_core >= 0 ? std::to_string(config.worker_core).c_str() : "(none)");
+    std::printf("  Publisher core: %s\n",
+                config.publisher_core >= 0 ? std::to_string(config.publisher_core).c_str() : "(none)");
     std::printf("  Num PRBs:       %u\n", config.num_prbs);
     std::printf("  LCM socket:     %s\n", config.lcm_socket_path.c_str());
     std::printf("  Codelet path:   %s\n",
@@ -301,7 +339,8 @@ int main(int argc, char** argv)
     
     // Register service models (each SM registers its stream_ids with the dispatcher)
     libe3::ErrorCode sm_result = agent.register_sm(std::make_unique<E3SMSpectrum>(
-        dispatcher, io_ctx, config.num_prbs, config.lcm_socket_path, config.codelet_base_path));
+        dispatcher, io_ctx, config.num_prbs, config.lcm_socket_path, config.codelet_base_path,
+        config.worker_core));
     if (sm_result != libe3::ErrorCode::SUCCESS) {
         std::cerr << "Failed to register Spectrum SM: "
                   << libe3::error_code_to_string(sm_result) << "\n";
@@ -346,12 +385,37 @@ int main(int argc, char** argv)
     // }
 
     std::cout << "Press Ctrl+C to stop...\n\n";
-    
+
+    // Pin polling thread to a dedicated core (if requested) AFTER agent.start():
+    // libe3 spawns its IO threads inside start() and they inherit the parent's
+    // affinity at the time of spawn, so pinning here keeps them on the unpinned
+    // set and reserves our core for the jbpf shared-memory drain.
+    bool busy_poll = (config.poll_core >= 0);
+    if (busy_poll) {
+        cpu_set_t mask;
+        CPU_ZERO(&mask);
+        CPU_SET(config.poll_core, &mask);
+        if (pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask) != 0) {
+            std::fprintf(stderr,
+                "[E3Controller] WARNING: failed to pin polling thread to core %d (%s); "
+                "falling back to sleep-based polling\n",
+                config.poll_core, std::strerror(errno));
+            busy_poll = false;
+        } else {
+            std::printf("[E3Controller] Polling thread pinned to core %d (busy-poll)\n",
+                        config.poll_core);
+        }
+    }
+
     // Main polling loop — the dispatcher routes buffers to registered SMs
     while (g_running) {
         dispatcher.poll();
 
-        if (config.poll_interval_us > 0) {
+        if (busy_poll) {
+#if defined(__x86_64__) || defined(__i386__)
+            _mm_pause();  // hyperthread-friendly hint
+#endif
+        } else if (config.poll_interval_us > 0) {
             usleep(config.poll_interval_us);
         }
     }
