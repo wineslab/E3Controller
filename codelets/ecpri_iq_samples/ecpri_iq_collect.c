@@ -71,6 +71,18 @@ struct jbpf_load_map_def SEC("maps") prb_filter_state = {
  * The loop is bounded to this value for the verifier. */
 #define COPY_LOOP_MAX MAX_IQ_PAYLOAD_BYTES
 
+/* Symbol-count filter (compile-time, edit-and-rebuild).
+ * UL-only codelet. Keep the LAST NUM_SYMBOLS symbols of each slot.
+ * Valid range: 4..14.
+ *   4  -> threshold sym_id >= 10: S-slot (sym 10..13) passes fully,
+ *         full UL slot contributes only sym 10..13.
+ *   14 -> threshold sym_id >= 0:  everything passes.
+ * The 4-floor is physical: the S-slot has exactly 4 UL symbols (10..13),
+ * so dropping below 4 would start cutting into it. */
+#define SLOT_SYMBOLS  14
+#define NUM_SYMBOLS   14
+#define SYMBOL_FLOOR  (SLOT_SYMBOLS - NUM_SYMBOLS)
+
 
 /* ---- Main codelet entry ---- */
 
@@ -80,6 +92,11 @@ uint64_t jbpf_main(void *state)
     struct jbpf_ran_ofh_ctx *ctx;
     ctx = (struct jbpf_ran_ofh_ctx *)state;
     int zero_index = 0;
+
+    /* Capture entry timestamp for codelet -> dApp latency measurement.
+     * Microseconds-mod-2^31: fits the existing 32-bit ASN.1 timestamp field
+     * (Spectrum-IQDataIndication.timestamp) and wraps every ~35 min. */
+    uint32_t entry_ts_us = (uint32_t)((jbpf_time_get_ns() / 1000ULL) & 0x7FFFFFFFULL);
 
     void *pkt_start = (void *)ctx->data;
     void *pkt_end = (void *)ctx->data_end;
@@ -126,6 +143,15 @@ uint64_t jbpf_main(void *state)
         return JBPF_CODELET_FAILURE;
     }
     next_hdr = (__u8 *)next_hdr + sizeof(struct radio_app_common_hdr);
+
+    /* --- Symbol-count filter (early drop) ---
+     * sf_slot_sym is 16 bits network-order: [subframeId:4][slotId:6][symbolId:6]
+     * Keep symbols whose id is in the last NUM_SYMBOLS of the slot. */
+    uint16_t sf_slot_sym = jbpf_ntohs(app_hdr->sf_slot_sym.value);
+    uint16_t symbol_id = sf_slot_sym & 0x3F;
+    if (symbol_id < SYMBOL_FLOOR) {
+        return JBPF_CODELET_SUCCESS;
+    }
 
     /* --- Parse Data Section Header --- */
     struct data_section_hdr *data_hdr = (struct data_section_hdr *)next_hdr;
@@ -203,16 +229,14 @@ uint64_t jbpf_main(void *state)
         return JBPF_CODELET_FAILURE;
     }
 
+    out->timestamp = entry_ts_us;
     out->direction = ctx->direction;
     out->frame_id = app_hdr->frame_id;  /* single byte, no endianness issue */
 
-    /* sf_slot_sym is 16 bits in network byte order:
-    *   [subframeId:4][slotId:6][symbolId:6]
-    * Must byte-swap before extracting. */
-    uint16_t sf_slot_sym = jbpf_ntohs(app_hdr->sf_slot_sym.value);
+    /* sf_slot_sym already parsed above for the symbol-percentage filter. */
     out->subframe_id = (sf_slot_sym >> 12) & 0xF;
     out->slot_id     = (sf_slot_sym >> 6)  & 0x3F;
-    out->symbol_id   = sf_slot_sym & 0x3F;
+    out->symbol_id   = symbol_id;
 
     out->section_id = (sec_bits >> 20) & 0xFFF;
     out->start_prbu = (sec_bits >> 8)  & 0x3FF;
