@@ -1,0 +1,12 @@
+codeletset_id: uplink_slot_samples
+
+codelet_descriptor:
+
+  - codelet_name: collector
+    codelet_path: ${JBPF_CODELETS}/uplink_slot_samples/uplink_slot_collect.o
+    hook_name: capture_uplink_slot
+    priority: 1
+    out_io_channel:
+      - name: output_map
+        stream_id: "7531abcd1234567890fedcba0987654a"
+        forward_destination: DestinationNone
