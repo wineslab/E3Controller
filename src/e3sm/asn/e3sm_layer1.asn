@@ -1,0 +1,59 @@
+-- L1-KPM Service Model ASN.1 Definitions
+--
+-- PHY-layer KPM SM at RAN Function ID 2. Telemetry-only: emits one
+-- indication payload per UL slot (or per period), referencing the
+-- /e3_ran_buffers POSIX shm region for the actual IQ bytes.
+--
+-- Field-for-field equivalent to the JSON schema in e3_kpm_enc_json.c
+-- so a dApp supporting both encodings can reuse most parsing logic:
+--
+--   {
+--     "iq_samples": { "shm_name", "fh_buffer_index", "fh_write_index" },
+--     "timestamp": uint64 ns,
+--     "sfn":       uint16,
+--     "slot":      uint16,
+--     "cell_id":   uint16,
+--     "n_rx_ant":  uint16
+--   }
+--
+-- Usage with E3 Protocol:
+-- - L1KPM-Indication is encoded into E3-IndicationMessage.protocolData
+--   and shipped to dApps on the ASN.1 channel. Aerial dApps on the JSON
+--   channel receive the equivalent payload via e3_kpm_enc_json.c.
+
+L1-KPM-SM DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+
+-- ============================================================================
+-- IQ-sample shm reference (parallels JSON `iq_samples` object)
+-- ============================================================================
+
+L1KPM-ShmRef ::= SEQUENCE {
+    shmName         OCTET STRING (SIZE (1..63)),                   -- "/e3_ran_buffers"
+    fhBufferIndex   INTEGER (0..255),                              -- which of the 2 FH buffers
+    fhWriteIndex    INTEGER (0..4294967295)                        -- row within that buffer
+}
+
+-- ============================================================================
+-- Top-level indication payload (E3-IndicationMessage.protocolData)
+-- ============================================================================
+--
+-- timestamp is unconstrained INTEGER so the full uint64 nanosecond range
+-- fits without bias; asn1c generates an INTEGER_t with a small heap buf
+-- which the encoder frees per call.
+--
+-- cellId and nRxAnt are OPTIONAL: they round-trip from PHY today but
+-- aerial dApps' stock subscription only grants the four core IDs
+-- (iq_samples, timestamp, sfn, slot). Marking them OPTIONAL costs one
+-- preamble bit each on the wire but lets a future granted-list shrink
+-- the payload further without a schema change.
+
+L1KPM-Indication ::= SEQUENCE {
+    iqSamplesRef    L1KPM-ShmRef OPTIONAL,
+    timestamp       INTEGER,
+    sfn             INTEGER (0..65535),
+    slot            INTEGER (0..65535),
+    cellId          INTEGER (0..65535) OPTIONAL,
+    nRxAnt          INTEGER (0..65535) OPTIONAL
+}
+
+END
