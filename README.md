@@ -293,19 +293,10 @@ message schema, in both JSON and ASN.1 (APER).
   representation **derived from** the same JSON schema (NVIDIA publishes the JSON
   schema only).
 
-Source schema (Apache-2.0, `Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES`),
-vendored under [`docs/nvidia/`](docs/nvidia/):
+Source schema (Apache-2.0, `Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES`):
 - [e3_message_schemas.json](https://github.com/NVIDIA/aerial-sample-apps/blob/main/dapps/docs/e3_message_schemas.json)
 - [e3_message_examples.json](https://github.com/NVIDIA/aerial-sample-apps/blob/main/dapps/docs/e3_message_examples.json)
 
-### Conformance of emitted fields
-
-| `protocolData` key | NVIDIA type | E3Controller |
-|---|---|---|
-| `iq_samples.{shm_name, fh_buffer_index, fh_write_index}` | object | ✅ exact match |
-| `timestamp` | integer (ns) | ✅ |
-| `sfn` | integer (0..1023) | ✅ |
-| `slot` | integer (0..159) | ✅ |
 
 **Deviations (out of scope for this release):** `cell_id` / `n_rx_ant` are
 `OPTIONAL` in `e3sm_layer1.asn` but omitted from the JSON path today (the codelet
