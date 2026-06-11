@@ -4,8 +4,11 @@
 -- indication payload per UL slot (or per period), referencing the
 -- /e3_ran_buffers POSIX shm region for the actual IQ bytes.
 --
--- Field-for-field equivalent to the JSON schema in e3_kpm_enc_json.c
--- so a dApp supporting both encodings can reuse most parsing logic:
+-- ATTRIBUTION: this ASN.1 grammar is DERIVED FROM NVIDIA Aerial's public E3
+-- message schema (indicationMessage.protocolData), Copyright (c) 2026 NVIDIA
+-- CORPORATION & AFFILIATES, SPDX-License-Identifier: Apache-2.0. See
+--   https://github.com/NVIDIA/aerial-sample-apps (dapps/docs/e3_message_schemas.json)
+-- NVIDIA publishes the JSON schema only.
 --
 --   {
 --     "iq_samples": { "shm_name", "fh_buffer_index", "fh_write_index" },
@@ -18,8 +21,8 @@
 --
 -- Usage with E3 Protocol:
 -- - L1KPM-Indication is encoded into E3-IndicationMessage.protocolData
---   and shipped to dApps on the ASN.1 channel. Aerial dApps on the JSON
---   channel receive the equivalent payload via e3_kpm_enc_json.c.
+--   and shipped to dApps on the ASN.1 channel. NVIDIA Aerial dApps on the JSON
+--   channel receive the equivalent payload via l1_kpm/e3sm_layer1_json.cpp.
 
 L1-KPM-SM DEFINITIONS AUTOMATIC TAGS ::= BEGIN
 
