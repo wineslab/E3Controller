@@ -7,10 +7,9 @@
 #
 #   1. fetch submodules (libe3 @ pinned tag, jbpf)
 #   2. init + patch jbpf's own 3p submodules
-#   3. apply the one required libe3 change (patches/01-dual-encoding.patch)
-#   4. configure libe3, stage asn1c's BOOLEAN.* skeletons (toolchain workaround),
+#   3. configure libe3, stage asn1c's BOOLEAN.* skeletons (toolchain workaround),
 #      then build + INSTALL to /usr/local (both encoders -> runtime --encoding)
-#   5. build the E3Controller (jbpf is built in-tree via add_subdirectory)
+#   4. build the E3Controller (jbpf is built in-tree via add_subdirectory)
 #
 # Needs nlohmann_json >= 3.11 installed (libe3's JSON floor). Linux only (jbpf
 # pulls linux/vm_sockets.h). Run from anywhere; we cd to the repo root. Override
@@ -20,25 +19,13 @@ cd "$(dirname "$0")"
 
 JOBS="${JOBS:-$( (command -v nproc >/dev/null && nproc) || sysctl -n hw.ncpu 2>/dev/null || echo 4 )}"
 
-echo "==> [1/5] Fetching submodules (libe3, jbpf)"
+echo "==> [1/4] Fetching submodules (libe3, jbpf)"
 git submodule update --init --recursive
 
-echo "==> [2/5] Initialising + patching jbpf 3p submodules"
+echo "==> [2/4] Initialising + patching jbpf 3p submodules"
 ( cd jbpf && bash ./init_and_patch_submodules.sh )
 
-echo "==> [3/5] Applying required libe3 patch (01-dual-encoding)"
-# The one functional libe3 change this release carries: relax the both-encoders
-# FATAL_ERROR guard so a single build serves --encoding asn1|json. Idempotent —
-# skipped if already applied (manually, or on a re-run).
-PATCH01="$(pwd)/patches/01-dual-encoding.patch"
-if git -C libe3 apply --check "${PATCH01}" 2>/dev/null; then
-  git -C libe3 apply "${PATCH01}"
-  echo "    applied 01-dual-encoding.patch"
-else
-  echo "    01-dual-encoding.patch already applied (or n/a) — skipping"
-fi
-
-echo "==> [4/5] Building + installing libe3 (ASN.1 + JSON) to /usr/local"
+echo "==> [3/4] Building + installing libe3 (ASN.1 + JSON) to /usr/local"
 # JSON encoding needs nlohmann_json >= 3.11 on the system (libe3's floor); install
 # it (header-only) or let libe3's FetchContent fetch it when the host has internet.
 cmake -S libe3 -B libe3/build -DLIBE3_ENABLE_ASN1=ON -DLIBE3_ENABLE_JSON=ON \
@@ -69,7 +56,7 @@ for f in ${BOOLEAN_FILES}; do cp "${SKEL}/${f}" libe3/build/messages/; done
 cmake --build libe3/build -j"${JOBS}"
 sudo cmake --install libe3/build
 
-echo "==> [5/5] Building E3Controller"
+echo "==> [4/4] Building E3Controller"
 cmake -S . -B build -DINITIALIZE_SUBMODULES=OFF
 cmake --build build -j"${JOBS}" --target e3_controller
 
