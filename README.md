@@ -36,12 +36,12 @@ controller's `--encoding` flag is a pure runtime choice) and installed
 system-wide. `build.sh` does this for you (step 4 below). Building both encoders
 requires `nlohmann_json` ≥ 3.11 (JSON) and `asn1c` (ASN.1).
 
-The release carries exactly one **functional** libe3 change,
+<!-- The release carries exactly one **functional** libe3 change,
 [`patches/01-dual-encoding.patch`](patches/01-dual-encoding.patch) (allow both
 encoders in one build), applied by `build.sh`. Two **toolchain** quirks are
 handled *without* patching libe3 — the nlohmann floor (install ≥ 3.11) and the
 E3AP `BOOLEAN.*` skeletons (staged by `build.sh`); see
-[`patches/README.md`](patches/README.md) for the details.
+[`patches/README.md`](patches/README.md) for the details. -->
 
 ## Build
 
@@ -151,7 +151,7 @@ Both timing logs are **off by default** and enabled by passing a path:
 - `--stats-log <path>` — written by `E3SMLayer1` (controller side). One row per
   published UL slot: `slot_seq, gnb_to_codelet_us, codelet_to_dispatch_us,
   dispatch_to_handler_us, shm_ns, encode_ns, emit_ns, nof_subc, iq_bytes`.
-- `--pub-stages-log <path>` — written by libe3's RAN outbound loop. One row per
+- (*not supported by libe3*)`--pub-stages-log <path>` — written by libe3's RAN outbound loop. One row per
   SM-emitted PDU: `message_id, queue_us, encode_us, zmq_send_us, t_sent_us`.
   (Plumbed into `E3Config.pub_stages_log_path`; libe3 also honours the
   `LIBE3_PUB_STAGES_LOG_PATH` env var as a fallback.)
@@ -320,9 +320,11 @@ vendored under [`docs/nvidia/`](docs/nvidia/):
 
 **Deviations (out of scope for this release):** `cell_id` / `n_rx_ant` are
 `OPTIONAL` in `e3sm_layer1.asn` but omitted from the JSON path today (the codelet
-doesn't surface them); `setupResponse.ranFunctionList[].ranFunctionData` is a
+doesn't surface them); 
+
+<!-- `setupResponse.ranFunctionList[].ranFunctionData` is a
 descriptive `{name, version, description}` object rather than NVIDIA's array of
-stream descriptors. See [`docs/nvidia/README.md`](docs/nvidia/README.md).
+stream descriptors. See [`docs/nvidia/README.md`](docs/nvidia/README.md). -->
 
 The **RF=1 Spectrum** service model (PRB-blacklist / spectrum sharing) is
 wineslab's own and is not part of NVIDIA's schema.
