@@ -31,17 +31,11 @@ sudo make install
 ### libe3 (git submodule)
 
 `libe3` is vendored as the [`libe3/`](https://github.com/wineslab/libe3) git
-submodule, pinned to tag **0.0.4**. It is built with **both** encoders (so the
+submodule, pinned to tag **0.0.5**. It is built with **both** encoders (so the
 controller's `--encoding` flag is a pure runtime choice) and installed
-system-wide. `build.sh` does this for you (step 4 below). Building both encoders
+system-wide. `build.sh` does this for you (step 3 below). Building both encoders
 requires `nlohmann_json` ≥ 3.11 (JSON) and `asn1c` (ASN.1).
 
-<!-- The release carries exactly one **functional** libe3 change,
-[`patches/01-dual-encoding.patch`](patches/01-dual-encoding.patch) (allow both
-encoders in one build), applied by `build.sh`. Two **toolchain** quirks are
-handled *without* patching libe3 — the nlohmann floor (install ≥ 3.11) and the
-E3AP `BOOLEAN.*` skeletons (staged by `build.sh`); see
-[`patches/README.md`](patches/README.md) for the details. -->
 
 ## Build
 
@@ -55,14 +49,12 @@ cd E3Controller
 ```
 
 `build.sh` will:
-1. `git submodule update --init --recursive` (fetches libe3 @ 0.0.4 and jbpf)
+1. `git submodule update --init --recursive` (fetches libe3 @ 0.0.5 and jbpf)
 2. init + patch jbpf's 3p submodules (`jbpf/init_and_patch_submodules.sh`)
-3. apply `patches/01-dual-encoding.patch` to libe3 (idempotent — the one functional libe3 change)
-4. configure libe3, stage asn1c's `BOOLEAN.*` skeletons into `libe3/build/messages/`
-   (toolchain workaround — see [`patches/README.md`](patches/README.md)), then build +
-   `sudo cmake --install` to `/usr/local`
+3. configure libe3, stage asn1c's `BOOLEAN.*` skeletons into `libe3/build/messages/`
+   (toolchain workaround, see above), then build + `sudo cmake --install` to `/usr/local`
    (`-DLIBE3_ENABLE_ASN1=ON -DLIBE3_ENABLE_JSON=ON -DLIBE3_BUILD_EXAMPLES=OFF -DLIBE3_BUILD_TESTS=OFF`)
-5. configure + build the E3Controller (jbpf is built in-tree via `add_subdirectory`)
+4. configure + build the E3Controller (jbpf is built in-tree via `add_subdirectory`)
 
 The binary is output to `out/bin/e3_controller`.
 
@@ -72,14 +64,11 @@ The binary is output to `out/bin/e3_controller`.
 git submodule update --init --recursive
 ( cd jbpf && bash ./init_and_patch_submodules.sh )
 
-# Apply the one functional libe3 change (allow both encoders in one build):
-( cd libe3 && git apply ../patches/01-dual-encoding.patch )
-
-# libe3 (both encoders) -> /usr/local  (examples/tests off)
+# libe3 (both encoders) -> /usr/local  (examples/tests off; no patches needed @ 0.0.5)
 cmake -S libe3 -B libe3/build -DLIBE3_ENABLE_ASN1=ON -DLIBE3_ENABLE_JSON=ON \
       -DLIBE3_BUILD_EXAMPLES=OFF -DLIBE3_BUILD_TESTS=OFF
 # Toolchain: stock libe3 lists BOOLEAN.* that this asn1c fork won't emit for its
-# BOOLEAN-free E3AP grammar — stage asn1c's skeletons in (see patches/README.md):
+# BOOLEAN-free E3AP grammar — stage asn1c's skeletons in:
 for f in BOOLEAN.c BOOLEAN.h BOOLEAN_aper.c BOOLEAN_print.c BOOLEAN_rfill.c BOOLEAN_uper.c BOOLEAN_xer.c; do
   cp /opt/asn1c/share/asn1c/$f libe3/build/messages/
 done
