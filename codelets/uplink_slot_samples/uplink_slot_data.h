@@ -24,16 +24,17 @@
  *   The inline `iq` array is fixed-size (eBPF verifier requires
  *   compile-time-known struct sizes). MAX_SLOT_IQ_BYTES is the ceiling
  *   for the runtime payload; the actual bytes used per fire are
- *   recorded in iq_size_bytes. Sizing at 200 000 bytes covers every
- *   NR BWP at 30 kHz SCS for 1 antenna port:
- *     273 PRBs * 12 subc * 14 symbols * 1 port * 4 bytes = 183 456 B
- *   plus ~16 KB headroom. 4T4R MIMO (~717 KB) would require a rebuild.
+ *   recorded in iq_size_bytes. Sizing at 733 824 bytes covers every
+ *   NR BWP at 30 kHz SCS for 4 antenna ports (4T4R MIMO):
+ *     273 PRBs * 12 subc * 14 symbols * 4 ports * 4 bytes = 733 824 B
+ *   (exactly; no headroom needed — the grid is fixed for 100 MHz/30 kHz).
  */
 
 /* Largest cbf16_t blob a single slot can carry through this codelet.
  * Compile-time constant - sizes the output ring slot, the verifier's
- * bounded copy loop, and the in-struct array length. */
-#define MAX_SLOT_IQ_BYTES 200000
+ * bounded copy loop, and the in-struct array length.
+ * 4 ports * 14 symbols * 3276 subc * 4 bytes = 733824. */
+#define MAX_SLOT_IQ_BYTES 733824
 
 struct uplink_slot_sample {
     /* gNB-side hand-off timestamp (CLOCK_REALTIME ns) captured by the

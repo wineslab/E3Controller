@@ -143,7 +143,9 @@ libe3::ErrorCode SlotIqPipeline::start() {
         slot_iq_stream_id_,
         [this](struct jbpf_io_stream_id* sid, void** bufs, int n) {
             process_buffers(sid, bufs, n);
-        });
+        },
+        /*defer_release=*/true);   // Option A: we own the buffers; the worker
+                                   // releases each after the consumer fan-out.
 
     return libe3::ErrorCode::SUCCESS;
 }
@@ -157,6 +159,19 @@ void SlotIqPipeline::stop() {
     running_.store(false, std::memory_order_release);
     if (worker_.joinable()) {
         worker_.join();
+    }
+
+    /* The worker may have exited (running_=false) with buffers still queued.
+     * We own them (defer_release=true), so release any it didn't reach BEFORE
+     * unload_codelets() tears down the channel/mempool below. The worker has
+     * joined, so this is the only thread touching the queue now. */
+    {
+        const uint64_t head = queue_head_.load(std::memory_order_relaxed);
+        uint64_t       tail = queue_tail_.load(std::memory_order_relaxed);
+        for (; tail != head; ++tail) {
+            jbpf_io_channel_release_buf(queue_[tail & (QUEUE_CAPACITY - 1)].buf);
+        }
+        queue_tail_.store(head, std::memory_order_relaxed);
     }
 
     const uint64_t dropped = dropped_.load(std::memory_order_relaxed);
@@ -194,12 +209,19 @@ void SlotIqPipeline::process_buffers(struct jbpf_io_stream_id* /*stream_id*/,
         const uint64_t head = queue_head_.load(std::memory_order_relaxed);
         const uint64_t tail = queue_tail_.load(std::memory_order_acquire);
         if (head - tail >= QUEUE_CAPACITY) {
+            /* Queue full: the worker will never see this buffer, so release it
+             * here ourselves (we own it - defer_release=true) to avoid leaking
+             * the jbpf ring slot. */
             dropped_.fetch_add(1, std::memory_order_relaxed);
+            jbpf_io_channel_release_buf(bufs[i]);
             continue;
         }
 
+        /* Option A: enqueue the buffer POINTER (zero-copy) - no 733 KB memcpy.
+         * The worker reads the slot straight from the jbpf ring and releases it
+         * after the consumer fan-out. */
         QueueEntry& slot = queue_[head & (QUEUE_CAPACITY - 1)];
-        std::memcpy(&slot.sample, sample, sizeof(*sample));
+        slot.buf = bufs[i];
 
         /* recv_us = wall-clock delta between codelet entry and dispatcher
          * poll. Captures codelet -> controller poll lag. Saturating
@@ -212,7 +234,9 @@ void SlotIqPipeline::process_buffers(struct jbpf_io_stream_id* /*stream_id*/,
 
         queue_head_.store(head + 1, std::memory_order_release);
     }
-    /* Buffer release stays with the dispatcher - do NOT release here. */
+    /* We own the buffers (defer_release=true): enqueued ones are released by the
+     * worker after fan-out, dropped ones were released above. So the dispatcher
+     * must NOT release here - and it won't (defer_release). */
 }
 
 void SlotIqPipeline::worker_loop() {
@@ -226,14 +250,21 @@ void SlotIqPipeline::worker_loop() {
             continue;
         }
 
-        dispatch_sample(queue_[tail & (QUEUE_CAPACITY - 1)]);
+        QueueEntry& entry = queue_[tail & (QUEUE_CAPACITY - 1)];
+        dispatch_sample(entry);
+        /* Consumers are synchronous (dispatch_sample fans out and returns once
+         * they have all run), so the jbpf buffer is safe to release now. We own
+         * it (defer_release=true) - release exactly once per enqueued slot. */
+        jbpf_io_channel_release_buf(entry.buf);
 
         queue_tail_.store(tail + 1, std::memory_order_release);
     }
 }
 
 void SlotIqPipeline::dispatch_sample(const QueueEntry& entry) {
-    const auto& s = entry.sample;
+    /* entry.buf points straight at the jbpf ring buffer (Option A, zero-copy).
+     * Valid until the worker releases it right after this fan-out returns. */
+    const auto& s = *static_cast<const struct uplink_slot_sample*>(entry.buf);
 
     SlotSample sample;
     sample.sfn             = s.sfn;

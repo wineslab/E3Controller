@@ -75,12 +75,14 @@ public:
 
     // Sibling of publish_row for the slot-level pipeline. Input is the
     // codelet-produced cbf16_t blob (bf16 real + bf16 imag, 4 bytes per
-    // complex sample) laid out as [sym][sc][I,Q] - matches ocudu's
-    // resource_grid_reader_impl tensor layout for a single port.
+    // complex sample) laid out as [port][sym][sc][I,Q] - matches ocudu's
+    // resource_grid_reader_impl tensor layout. Writes nof_ports antennas
+    // (clamped to kShmAntsLayout); antennas beyond nof_ports stay zero.
     // Converts bf16 → IEEE half (fp16) on the fly so the dApp's reader
     // sees the same wire shape it expects from the legacy int16 path.
     // Returns the (fh_buffer_index, fh_write_index) like publish_row.
     void publish_row_cbf16(const uint8_t* iq_cbf16_bytes,
+                           uint16_t nof_ports,
                            uint8_t& out_buffer_index,
                            uint32_t& out_write_index);
 

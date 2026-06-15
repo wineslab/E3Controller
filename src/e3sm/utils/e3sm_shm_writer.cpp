@@ -269,6 +269,7 @@ void ShmIqWriter::publish_row(const int16_t* iq_int16,
 }
 
 void ShmIqWriter::publish_row_cbf16(const uint8_t* iq_cbf16_bytes,
+                                    uint16_t nof_ports,
                                     uint8_t& out_buffer_index,
                                     uint32_t& out_write_index)
 {
@@ -278,9 +279,9 @@ void ShmIqWriter::publish_row_cbf16(const uint8_t* iq_cbf16_bytes,
     uint8_t* row_base = buffers_base_
                      + static_cast<size_t>(next_buf_) * fh_buffer_size_
                      + static_cast<size_t>(next_row_) * row_bytes_;
-    uint16_t* ant0 = reinterpret_cast<uint16_t*>(row_base);
+    uint16_t* row_u16 = reinterpret_cast<uint16_t*>(row_base);
 
-    // Source cbf16 layout: [sym][sc] of (bf16 real, bf16 imag) - 4 bytes
+    // Source cbf16 layout: [port][sym][sc] of (bf16 real, bf16 imag) - 4 bytes
     // per complex sample. Each bf16 is read as a little-endian uint16.
     // The 2-byte alignment of cbf16 matches uint16, so we can just
     // reinterpret_cast safely.
@@ -288,44 +289,49 @@ void ShmIqWriter::publish_row_cbf16(const uint8_t* iq_cbf16_bytes,
 
     // Hoist scale out of the loop so it's a constant for the SIMD path.
     const float scale = cbf16_scale_;
-    // n_u16 = total uint16 samples = 2 * (sym * sc) — real + imag in one
+    // n_u16 = uint16 samples PER ANTENNA = 2 * (sym * sc) — real + imag in one
     // linear pass (the per-pair structure doesn't matter for the bit-wise
-    // bf16 -> fp16 transformation).
+    // bf16 -> fp16 transformation). This is also the per-antenna fp16 stride
+    // within the row (== kShmAntStride): both src ([port][..]) and dst
+    // ([ant][..]) advance by n_u16 per antenna, so port p maps to antenna p.
     const size_t n_u16 = static_cast<size_t>(kShmSymbolsPerRow) * kShmScPerSymbol * 2u;
 
+    // Write every delivered antenna; antennas >= nof_ports stay zero (the row
+    // was zero-filled once in open()). Clamp to the row's antenna capacity.
+    uint16_t ports = nof_ports ? nof_ports : 1;
+    if (ports > kShmAntsLayout) ports = kShmAntsLayout;
+
+    for (uint16_t a = 0; a < ports; ++a) {
+        uint16_t*       dst  = row_u16 + static_cast<size_t>(a) * n_u16;
+        const uint16_t* srca = src     + static_cast<size_t>(a) * n_u16;
 #if defined(__AVX2__) && defined(__F16C__)
-    // Fast path: 8 bf16 -> 8 fp16 per iteration via AVX2 + F16C. Each
-    // iteration:
-    //   1. load 8 bf16 (16 bytes)
-    //   2. zero-extend to 8 x uint32 (__m256i)
-    //   3. shift left 16 -> bit-pattern of bf16 promoted to float32
-    //   4. multiply by scale
-    //   5. round/convert 8 float32 -> 8 fp16 with _mm256_cvtps_ph
-    //   6. store 16 bytes
-    const __m256 v_scale = _mm256_set1_ps(scale);
-    size_t i = 0;
-    for (; i + 8 <= n_u16; i += 8) {
-        __m128i b16 = _mm_loadu_si128(
-            reinterpret_cast<const __m128i*>(src + i));
-        __m256i u32_ext = _mm256_cvtepu16_epi32(b16);
-        __m256i u32_sh  = _mm256_slli_epi32(u32_ext, 16);
-        __m256  f32     = _mm256_castsi256_ps(u32_sh);
-        __m256  fscaled = _mm256_mul_ps(f32, v_scale);
-        __m128i ph      = _mm256_cvtps_ph(fscaled, _MM_FROUND_TO_NEAREST_INT);
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(ant0 + i), ph);
-    }
-    // n_u16 is a multiple of 8 for every supported PRB count
-    // (273 PRB -> 91728, 106 PRB -> 35616), so the AVX2 loop handles
-    // every element. We assert that at compile time and skip a scalar
-    // tail — keeps gcc from warning about a dead loop.
-    static_assert((kShmSymbolsPerRow * kShmScPerSymbol * 2) % 8 == 0,
-                  "n_u16 must be a multiple of 8 for the AVX2 path");
-    (void)i;
+        // Fast path: 8 bf16 -> 8 fp16 per iteration via AVX2 + F16C:
+        //   1. load 8 bf16 (16 bytes); 2. zero-extend to 8 x uint32;
+        //   3. shift left 16 -> bf16 promoted to float32; 4. multiply by scale;
+        //   5. convert 8 float32 -> 8 fp16 (_mm256_cvtps_ph); 6. store 16 bytes.
+        const __m256 v_scale = _mm256_set1_ps(scale);
+        size_t i = 0;
+        for (; i + 8 <= n_u16; i += 8) {
+            __m128i b16 = _mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(srca + i));
+            __m256i u32_ext = _mm256_cvtepu16_epi32(b16);
+            __m256i u32_sh  = _mm256_slli_epi32(u32_ext, 16);
+            __m256  f32     = _mm256_castsi256_ps(u32_sh);
+            __m256  fscaled = _mm256_mul_ps(f32, v_scale);
+            __m128i ph      = _mm256_cvtps_ph(fscaled, _MM_FROUND_TO_NEAREST_INT);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i), ph);
+        }
+        // n_u16 is a multiple of 8 per antenna (273 PRB -> 91728), so the AVX2
+        // loop handles every element; assert it and skip a scalar tail.
+        static_assert((kShmSymbolsPerRow * kShmScPerSymbol * 2) % 8 == 0,
+                      "n_u16 must be a multiple of 8 for the AVX2 path");
+        (void)i;
 #else
-    for (size_t i = 0; i < n_u16; ++i) {
-        ant0[i] = bf16_to_fp16(src[i], scale);
-    }
+        for (size_t i = 0; i < n_u16; ++i) {
+            dst[i] = bf16_to_fp16(srca[i], scale);
+        }
 #endif
+    }
 
     if (++next_row_ >= num_fh_rows_) {
         next_row_ = 0;

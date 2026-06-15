@@ -39,6 +39,7 @@ bool encode_iq_indication_aper(uint64_t timestamp_ns,
                                const std::string& shm_name,
                                uint8_t fh_buffer_index,
                                uint32_t fh_write_index,
+                               uint16_t nof_ports,
                                std::vector<uint8_t>& out)
 {
     L1KPM_Indication_t ind;
@@ -69,8 +70,13 @@ bool encode_iq_indication_aper(uint64_t timestamp_ns,
     ind.sfn  = static_cast<long>(sfn);
     ind.slot = static_cast<long>(slot);
 
-    // cellId / nRxAnt left OPTIONAL-absent — the codelet doesn't surface
-    // them today. Adding them is a one-line change here when it does.
+    // cellId left OPTIONAL-absent. nRxAnt carries the antenna count so a dApp
+    // knows how many antennas the shm row holds. asn1c maps OPTIONAL INTEGER
+    // to long*; the calloc'd member is freed by ASN_STRUCT_FREE_CONTENTS_ONLY.
+    if (nof_ports > 0) {
+        ind.nRxAnt = static_cast<long*>(std::calloc(1, sizeof(long)));
+        if (ind.nRxAnt) *ind.nRxAnt = static_cast<long>(nof_ports);
+    }
 
     // Buffer sizing: payload is small (≈80 bytes including shm_name); 256 is
     // comfortable headroom and matches the existing Spectrum encoders.

@@ -32,25 +32,29 @@
 /* ---- Maps ----
  * One output map, zero-copy via jbpf_get_output_buf / jbpf_send_output.
  * Using jbpf_output_map rather than jbpf_ringbuf_map so the codelet
- * writes the 200 KB struct directly into the ring slot without going
- * through a temp-map intermediate first. One memcpy on the codelet
- * side instead of two.
+ * writes the full ~733 KB slot struct (4 antennas x 14 sym x 3276 subc x
+ * cbf16_t) directly into the ring slot without going through a temp-map
+ * intermediate first. One memcpy on the codelet side instead of two.
  */
 jbpf_output_map(output_map, struct uplink_slot_sample, 32);
 
 /* ---- Constants ---- */
 
-/* Chunked copy size. 64 bytes = one cache line = 16 cbf16_t samples.
+/* Chunked copy size. 128 bytes = two cache lines = 32 cbf16_t samples.
  * Picked so that:
- *  - Constant size lets __builtin_memcpy lower to a single AVX-style
- *    vmov sequence the eBPF verifier handles cheaply.
- *  - 64 divides nof_subc * sizeof(cbf16_t) for every NR PRB count we
- *    deploy (106 -> 5088 bytes/symbol, 273 -> 13104 bytes/symbol;
- *    both exact multiples of 64). So we never leave a trailing tail.
- *  - Outer loop bound = MAX_SLOT_IQ_BYTES / 64 = ~3 125 iterations,
- *    4x fewer verifier bounds checks than the previous 16 B chunks.
+ *  - Constant size lets __builtin_memcpy lower to a short fixed
+ *    vector-move sequence the eBPF verifier handles cheaply.
+ *  - 128 divides the full 4-antenna slot payload
+ *    (4 * 14 * 3276 * sizeof(cbf16_t) = 733 824 bytes; 733824 / 128 =
+ *    5 733 exactly), so the flat slot copy leaves no trailing tail for
+ *    the 273-PRB/4-port deployment. (A grid whose payload is not a
+ *    multiple of 128 would leave up to 127 bytes uncopied at the tail.)
+ *  - Outer loop bound = MAX_SLOT_IQ_BYTES / 128 = 5 733 iterations,
+ *    half the per-chunk bounds checks of the previous 64 B chunks
+ *    (~11 466). The copy is memory-bandwidth bound, so this only trims
+ *    the loop overhead, not the bulk data-movement cost.
  */
-#define COPY_CHUNK_BYTES 64
+#define COPY_CHUNK_BYTES 128
 #define MAX_COPY_CHUNKS  (MAX_SLOT_IQ_BYTES / COPY_CHUNK_BYTES)
 
 /* ---- Main codelet entry ---- */

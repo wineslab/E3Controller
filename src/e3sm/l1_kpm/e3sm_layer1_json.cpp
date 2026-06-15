@@ -16,16 +16,19 @@ bool encode_iq_indication_json(uint64_t timestamp_ns,
                                const std::string& shm_name,
                                uint8_t fh_buffer_index,
                                uint32_t fh_write_index,
+                               uint16_t nof_ports,
                                std::vector<uint8_t>& out)
 {
     // Field set + key spelling per NVIDIA aerial-sample-apps
     // dapps/docs/e3_message_examples.json indicationMessage.protocolData. The dApp reads
     // sfn/slot at protocolData top level (payload.value("sfn"/"slot", 0u))
     // and forwards them to the visualizer for TDD-aligned rendering.
+    // n_rx_ant tells the dApp how many antennas the shm row holds.
     nlohmann::json j = {
         {"timestamp", timestamp_ns},
         {"sfn",       sfn},
         {"slot",      slot},
+        {"n_rx_ant",  nof_ports},
         {"iq_samples", {
             {"shm_name",        shm_name},
             {"fh_buffer_index", fh_buffer_index},

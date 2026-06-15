@@ -46,12 +46,14 @@ namespace e3sm_layer1 {
 // shm_name       = POSIX SHM segment name (e.g. "/e3_ran_buffers"); echoed
 //                  back so the dApp can sanity-check against its own mmap.
 // fh_buffer_*    = ring-buffer coordinates the dApp uses to address the row.
+// nof_ports      = number of RX antennas in the shm row (emitted as nRxAnt).
 bool encode_iq_indication_aper(uint64_t timestamp_ns,
                                uint16_t sfn,
                                uint16_t slot,
                                const std::string& shm_name,
                                uint8_t fh_buffer_index,
                                uint32_t fh_write_index,
+                               uint16_t nof_ports,
                                std::vector<uint8_t>& out);
 
 // Encode the Layer-1 SM's descriptive RanFunctionData. Uses the

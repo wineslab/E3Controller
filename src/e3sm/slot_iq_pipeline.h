@@ -143,18 +143,24 @@ public:
     uint64_t dropped_samples() const { return dropped_.load(std::memory_order_relaxed); }
 
 private:
-    /* SPSC ring capacity. 32 slots × ~200 KB each = ~6 MB total. At
-     * 400 UL slots/sec the ring holds ~80 ms of buffering - plenty
-     * for any reasonable worker stall. Power of 2 for cheap masking. */
+    /* SPSC ring capacity. At most 32 jbpf buffers can be un-released at once, so
+     * the queue never needs more entries than the ring has slots. Power of 2
+     * for cheap masking.  */
     static constexpr std::size_t QUEUE_CAPACITY = 32;
 
     struct QueueEntry {
-        struct uplink_slot_sample sample;
+        /* Pointer to the jbpf ring buffer (a uplink_slot_sample) the codelet
+         * wrote. Option A: we enqueue the POINTER (zero-copy) instead of
+         * memcpy'ing the ~733 KB slot on the poll thread. The dispatcher stream
+         * is registered with defer_release=true, so the dispatcher does NOT free
+         * this buffer; the worker releases it (jbpf_io_channel_release_buf) after
+         * the consumer fan-out. Valid from enqueue until that release. */
+        void*    buf;
         /* CLOCK_REALTIME ns at dispatcher poll entry. Used by the SM to
          * derive the codelet -> dispatcher stage cost. */
-        uint64_t                  dispatch_ts_ns;
-        uint32_t                  recv_us;
-        uint32_t                  sample_id;
+        uint64_t dispatch_ts_ns;
+        uint32_t recv_us;
+        uint32_t sample_id;
     };
 
     /* Dynamic codelet load via jbpf LCM IPC. Pulls
@@ -164,10 +170,10 @@ private:
     bool load_codelets();
     void unload_codelets();
 
-    /* Dispatcher callback: copies each incoming slot into the SPSC
-     * queue. Runs on the dispatcher's poll thread - must stay cheap.
-     * The 200 KB memcpy here is acceptable at 400 fires/sec (~12 µs
-     * × 400 = 4.8 ms/sec on the poll core). */
+    /* Dispatcher callback (registered defer_release=true): enqueues each
+     * incoming slot's buffer POINTER into the SPSC queue - no memcpy, runs ~free
+     * on the poll thread. On a full queue it releases the dropped buffer itself
+     * (the worker won't see it); the worker releases the rest after fan-out. */
     void process_buffers(struct jbpf_io_stream_id* sid, void** bufs, int n);
 
     /* Worker-thread loop: drains the SPSC queue, fans out to each

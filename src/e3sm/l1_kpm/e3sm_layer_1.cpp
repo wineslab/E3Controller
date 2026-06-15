@@ -122,13 +122,19 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
         if (abs_slot != target_slot_) return;
     }
 
-    // Sanity: bytes must match the SHM row layout we know how to
-    // publish (kShmSymbolsPerRow × kShmScPerSymbol × 4 bytes). If
-    // ocudu's grid shape ever drifts from 106-PRB single-port, this
-    // would catch it.
-    constexpr uint32_t kExpectedBytes =
+    // Sanity: the blob must carry every antenna port we intend to publish
+    // (nof_ports × kShmSymbolsPerRow × kShmScPerSymbol × 4 bytes/cbf16),
+    // clamped to the SHM row's antenna capacity (kShmAntsLayout). Catches a
+    // grid-shape drift (e.g. ocudu shipping fewer ports than nof_ports claims).
+    const uint16_t ports_clamped =
+        (s.nof_ports == 0) ? 1u
+        : (s.nof_ports > e3sm_spectrum::kShmAntsLayout
+               ? static_cast<uint16_t>(e3sm_spectrum::kShmAntsLayout)
+               : s.nof_ports);
+    const uint32_t kPerAntBytes =
         static_cast<uint32_t>(e3sm_spectrum::kShmSymbolsPerRow) *
         static_cast<uint32_t>(e3sm_spectrum::kShmScPerSymbol) * 4u;
+    const uint32_t kExpectedBytes = static_cast<uint32_t>(ports_clamped) * kPerAntBytes;
     if (s.iq == nullptr || s.iq_size_bytes < kExpectedBytes) {
         std::fprintf(stderr,
             "[E3SMLayer1] Slot blob too small: %u bytes (need >= %u). "
@@ -164,7 +170,7 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     const auto t_shm_start = clock::now();
     uint8_t  fh_buf_idx   = 0;
     uint32_t fh_write_idx = 0;
-    shm_writer_.publish_row_cbf16(s.iq, fh_buf_idx, fh_write_idx);
+    shm_writer_.publish_row_cbf16(s.iq, ports_clamped, fh_buf_idx, fh_write_idx);
     const auto t_shm_end = clock::now();
 
     // Absolute slot within a 10 ms frame (0..19 at 30 kHz SCS).
@@ -189,10 +195,10 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     const bool encoded_ok = want_json
         ? e3sm_layer1::encode_iq_indication_json(
               s.gnb_ts_ns, s.sfn, abs_slot, shm_name_,
-              fh_buf_idx, fh_write_idx, encoded_buf_)
+              fh_buf_idx, fh_write_idx, ports_clamped, encoded_buf_)
         : e3sm_layer1::encode_iq_indication_aper(
               s.gnb_ts_ns, s.sfn, abs_slot, shm_name_,
-              fh_buf_idx, fh_write_idx, encoded_buf_);
+              fh_buf_idx, fh_write_idx, ports_clamped, encoded_buf_);
     const uint64_t encode_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         clock::now() - t_encode_start).count();
 
