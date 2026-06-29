@@ -16,22 +16,12 @@ The controller serves **one** wire encoding at a time (selected with `--encoding
 - [nlohmann/json](https://github.com/nlohmann/json) ≥ 3.11 — JSON encoder (header-only; install system-wide, or let libe3's FetchContent pull it when online)
 - ZeroMQ (`libzmq3-dev`)
 
-### Installing asn1c (mouse07410 fork)
 
-```bash
-sudo apt-get install -y bison flex
-git clone https://github.com/mouse07410/asn1c.git
-cd asn1c
-test -f configure || autoreconf -iv
-./configure
-make -j$(nproc)
-sudo make install
-```
 
 ### libe3 (git submodule)
 
 `libe3` is vendored as the [`libe3/`](https://github.com/wineslab/libe3) git
-submodule, pinned to tag **0.0.5**. It is built with **both** encoders (so the
+submodule, pinned to tag **0.0.6**. It is built with **both** encoders (so the
 controller's `--encoding` flag is a pure runtime choice) and installed
 system-wide. `build.sh` does this for you (step 3 below). Building both encoders
 requires `nlohmann_json` ≥ 3.11 (JSON) and `asn1c` (ASN.1).
@@ -49,7 +39,7 @@ cd E3Controller
 ```
 
 `build.sh` will:
-1. `git submodule update --init --recursive` (fetches libe3 @ 0.0.5 and jbpf)
+1. `git submodule update --init --recursive` (fetches libe3 @ 0.0.6 and jbpf)
 2. init + patch jbpf's 3p submodules (`jbpf/init_and_patch_submodules.sh`)
 3. configure libe3, stage asn1c's `BOOLEAN.*` skeletons into `libe3/build/messages/`
    (toolchain workaround, see above), then build + `sudo cmake --install` to `/usr/local`
@@ -60,11 +50,23 @@ The binary is output to `out/bin/e3_controller`.
 
 <details><summary>Manual build (equivalent steps)</summary>
 
+##### Installing asn1c (mouse07410 fork)
+
+```bash
+sudo apt-get install -y bison flex
+git clone https://github.com/mouse07410/asn1c.git
+cd asn1c
+test -f configure || autoreconf -iv
+./configure
+make -j$(nproc)
+sudo make install
+```
+
 ```bash
 git submodule update --init --recursive
 ( cd jbpf && bash ./init_and_patch_submodules.sh )
 
-# libe3 (both encoders) -> /usr/local  (examples/tests off; no patches needed @ 0.0.5)
+# libe3 (both encoders) -> /usr/local  (examples/tests off; no patches needed @ 0.0.6)
 cmake -S libe3 -B libe3/build -DLIBE3_ENABLE_ASN1=ON -DLIBE3_ENABLE_JSON=ON \
       -DLIBE3_BUILD_EXAMPLES=OFF -DLIBE3_BUILD_TESTS=OFF
 # Toolchain: stock libe3 lists BOOLEAN.* that this asn1c fork won't emit for its
