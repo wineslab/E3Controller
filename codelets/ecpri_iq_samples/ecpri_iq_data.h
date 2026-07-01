@@ -1,14 +1,7 @@
-/*
- * ecpri_iq_data.h
- *
- * Data structure for I/Q samples produced by the ecpri_iq_collect codelet.
- * This must match the struct defined in the codelet's ecpri_iq_data.h.
- */
+#ifndef ECPRI_IQ_DATA_H
+#define ECPRI_IQ_DATA_H
 
-#ifndef E3_ECPRI_IQ_DATA_H
-#define E3_ECPRI_IQ_DATA_H
-
-#include <cstdint>
+#include <stdint.h>
 
 /* Maximum I/Q payload size in bytes.
  * With 9-bit BFP compression: each PRB = 1 byte exponent + 27 bytes I/Q = 28 bytes.
@@ -33,10 +26,9 @@ struct iq_sample_data {
 };
 
 /* Configuration for PRB-based filtering in the codelet.
- * Sent via control input channel from the E3Controller.
- * Must match the struct in jrtc-apps/codelets/ecpri_iq_samples/ecpri_iq_data.h */
+ * Sent via control input channel from the E3Controller. */
 struct prb_filter_config {
     uint16_t expected_num_prbu;  /* 0 = no filtering (pass all), >0 = filter to this PRB count */
 };
 
-#endif /* E3_ECPRI_IQ_DATA_H */
+#endif /* ECPRI_IQ_DATA_H */

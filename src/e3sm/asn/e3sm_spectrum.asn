@@ -2,17 +2,20 @@
 -- This service model extends E3 messages for spectrum sharing applications
 --
 -- Usage with E3 Protocol:
--- - Spectrum-IndicationData structures are encoded into the protocolData field of E3-IndicationMessage
--- - Spectrum-ControlData structures are encoded into the actionData field of E3-ControlAction
--- - Use E3-PDU as the top-level message structure
+-- - Spectrum-IndicationData    is encoded into E3-IndicationMessage.protocolData
+-- - Spectrum-DAppControlData   is encoded into E3-DAppControlAction.actionData
+-- - Spectrum-DAppReportData    is encoded into E3-DAppReport.reportData
+-- - Spectrum-XAppControlData   is encoded into E3-XAppControlAction.xAppControlData
+--
+-- Each "*Data" envelope is a (Type, Payload) pair: the Type enum is a human-
+-- readable discriminator and the Payload CHOICE carries the variant body.
 
 SPECTRUM-SM DEFINITIONS AUTOMATIC TAGS ::= BEGIN
 
 -- ============================================================================
--- SM SPECTRUM RAN FUNCTION DATA STRUCTURES  
+-- SM SPECTRUM RAN FUNCTION DATA STRUCTURES
 -- ============================================================================
 
--- Spectrum RAN function data
 Spectrum-RanFunctionData ::= SEQUENCE {
     name                    OCTET STRING (SIZE (1..32)),
     version                 INTEGER (0..65535),
@@ -23,28 +26,82 @@ Spectrum-RanFunctionData ::= SEQUENCE {
 -- INDICATION MESSAGE STRUCTURES
 -- ============================================================================
 
--- Spectrum IQ Data Indication (raw I/Q samples from RAN)
+-- Spectrum IQ Data Indication (raw I/Q samples / shm metadata blob from RAN)
 Spectrum-IQDataIndication ::= SEQUENCE {
     iqSamples               OCTET STRING (SIZE (1..16384)),                 -- Raw I/Q data as int16 array
     sampleCount             INTEGER (0..32768),                             -- Number of I/Q samples
     timestamp               INTEGER (0..2147483647) OPTIONAL                -- Unix timestamp when samples were captured
 }
 
+Spectrum-IndicationType ::= ENUMERATED {
+    iqData                  (0)
+}
+
+Spectrum-IndicationPayload ::= CHOICE {
+    iqDataIndication                Spectrum-IQDataIndication
+}
+
+-- Top-level indication PDU carried by E3-IndicationMessage.protocolData
+Spectrum-IndicationData ::= SEQUENCE {
+    indicationType          Spectrum-IndicationType,
+    indicationPayload       Spectrum-IndicationPayload
+}
+
 -- ============================================================================
--- CONTROL ACTION STRUCTURES  
+-- dAPP CONTROL ACTION STRUCTURES
 -- ============================================================================
 
 -- PRB Blacklist Control (main control message used by spectrum dApp)
 Spectrum-PRBBlacklistControl ::= SEQUENCE {
-    blacklistedPRBs   SEQUENCE (SIZE (0..maxPRBs)) OF INTEGER (0..maxPRBIndex),     -- List of PRB indices
-    samplingThreshold       INTEGER (0..100) OPTIONAL,                              -- Sampling ratio for the IQ captures, one delivery each samplingThreshold
-    validityPeriod          INTEGER (1..3600) OPTIONAL                              -- How long this blacklist is valid (seconds)
+    blacklistedPRBs         SEQUENCE (SIZE (0..maxPRBs)) OF INTEGER (0..maxPRBIndex),     -- List of PRB indices
+    samplingThreshold       INTEGER (0..100) OPTIONAL,                                    -- Sampling ratio for the IQ captures, one delivery each samplingThreshold
+    validityPeriod          INTEGER (1..3600) OPTIONAL                                    -- How long this blacklist is valid (seconds)
+}
+
+Spectrum-DAppControlType ::= ENUMERATED {
+    prbBlacklist            (0)
+}
+
+Spectrum-DAppControlPayload ::= CHOICE {
+    prbBlacklistControl     Spectrum-PRBBlacklistControl
+}
+
+-- Top-level dApp control PDU carried by E3-DAppControlAction.actionData
+Spectrum-DAppControlData ::= SEQUENCE {
+    controlType             Spectrum-DAppControlType,
+    controlPayload          Spectrum-DAppControlPayload
 }
 
 -- ============================================================================
--- xAPP CONTROL ACTION STRUCTURES  
+-- dAPP REPORT STRUCTURES
 -- ============================================================================
 
+Spectrum-PRBBlacklistReport ::= SEQUENCE {
+    blacklistedPRBs         SEQUENCE (SIZE (0..maxPRBs)) OF INTEGER (0..maxPRBIndex)     -- List of PRB indices
+}
+
+Spectrum-DAppReportType ::= ENUMERATED {
+    prbBlacklist            (0)
+}
+
+Spectrum-DAppReportPayload ::= CHOICE {
+    prbBlacklistReport      Spectrum-PRBBlacklistReport
+}
+
+-- Top-level dApp report PDU carried by E3-DAppReport.reportData
+Spectrum-DAppReportData ::= SEQUENCE {
+    reportType              Spectrum-DAppReportType,
+    reportPayload           Spectrum-DAppReportPayload
+}
+
+-- ============================================================================
+-- xAPP CONTROL ACTION STRUCTURES
+-- ============================================================================
+
+-- Control payload mirroring the dApp PRB blacklist for xApp-driven blocking
+Spectrum-PRBBlockedControl ::= SEQUENCE {
+    blockedPRBs             SEQUENCE (SIZE (0..maxPRBs)) OF INTEGER (0..maxPRBIndex)
+}
 
 -- Spectrum Configuration Control
 Spectrum-ConfigControl ::= SEQUENCE {
@@ -53,12 +110,26 @@ Spectrum-ConfigControl ::= SEQUENCE {
     enable                  BOOLEAN OPTIONAL                                -- Enable/disable spectrum monitoring
 }
 
+Spectrum-XAppControlType ::= ENUMERATED {
+    prbBlocked              (0),
+    config                  (1)
+}
+
+Spectrum-XAppControlPayload ::= CHOICE {
+    prbBlockedControl       Spectrum-PRBBlockedControl,
+    configControl           Spectrum-ConfigControl
+}
+
+-- Top-level xApp control PDU carried by E3-XAppControlAction.xAppControlData
+Spectrum-XAppControlData ::= SEQUENCE {
+    controlType             Spectrum-XAppControlType,
+    controlPayload          Spectrum-XAppControlPayload
+}
 
 -- ============================================================================
 -- CONSTANTS AND CONSTRAINTS
 -- ============================================================================
 
--- Maximum values based on 5G NR specifications
 maxPRBs                     INTEGER ::= 273                                 -- Maximum PRBs in 5G NR
 maxPRBIndex                 INTEGER ::= 272                                 -- maxPRBs - 1
 

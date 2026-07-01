@@ -1,3 +1,6 @@
 [submodule "jbpf"]
 	path = jbpf
 	url = https://github.com/microsoft/jbpf.git
+[submodule "libe3"]
+	path = libe3
+	url = https://github.com/wineslab/libe3.git

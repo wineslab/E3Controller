@@ -25,16 +25,24 @@ extern "C" {
 class JbpfDispatcher {
 public:
     // Callback signature: the SM receives (stream_id, bufs, num_bufs).
-    // The SM must NOT release buffers — the dispatcher does that.
+    // By default the SM must NOT release buffers — the dispatcher frees them
+    // after the handler returns. A stream registered with defer_release=true
+    // instead takes OWNERSHIP of its buffers: the dispatcher will NOT free them,
+    // and the handler (or whatever it hands them to) must call
+    // jbpf_io_channel_release_buf() on each exactly once. SlotIqPipeline uses
+    // this to queue the buffer POINTER to its worker (zero-copy) and release it
+    // after the consumer fan-out, instead of memcpy'ing the whole ~733 KB slot
+    // on the poll thread.
     using BufferHandler = std::function<void(struct jbpf_io_stream_id*, void**, int)>;
 
     explicit JbpfDispatcher(jbpf_io_ctx* io_ctx) : io_ctx_(io_ctx) {}
 
-    // Register a handler for a specific stream_id.
-    void register_stream(const struct jbpf_io_stream_id& stream_id, BufferHandler handler) {
+    // Register a handler for a specific stream_id. With defer_release=true the
+    // handler takes ownership of the buffers (the dispatcher will not free them).
+    void register_stream(const struct jbpf_io_stream_id& stream_id, BufferHandler handler,
+                         bool defer_release = false) {
         std::lock_guard<std::mutex> lock(mu_);
-        StreamKey key(stream_id);
-        handlers_[key] = std::move(handler);
+        handlers_[StreamKey(stream_id)] = StreamEntry{std::move(handler), defer_release};
     }
 
     // Unregister a handler.
@@ -73,9 +81,15 @@ private:
         }
     };
 
+    // Per-stream handler + whether the handler owns (defers) buffer release.
+    struct StreamEntry {
+        BufferHandler handler;
+        bool          defer_release{false};
+    };
+
     jbpf_io_ctx* io_ctx_;
     std::mutex mu_;
-    std::unordered_map<StreamKey, BufferHandler, StreamKeyHash> handlers_;
+    std::unordered_map<StreamKey, StreamEntry, StreamKeyHash> handlers_;
 
     // Static C callback — thin trampoline to the dispatcher instance
     static void dispatch_callback(
@@ -93,11 +107,13 @@ private:
         if (!stream_id || num_bufs <= 0) return;
 
         BufferHandler handler;
+        bool          defer_release = false;
         {
             std::lock_guard<std::mutex> lock(mu_);
             auto it = handlers_.find(StreamKey(*stream_id));
             if (it != handlers_.end()) {
-                handler = it->second;
+                handler       = it->second.handler;
+                defer_release = it->second.defer_release;
             }
         }
 
@@ -113,9 +129,13 @@ private:
             std::printf("\n");
         }
 
-        // Always release all buffers
-        for (int i = 0; i < num_bufs; i++) {
-            jbpf_io_channel_release_buf(bufs[i]);
+        // Release all buffers — unless a registered handler took ownership
+        // (defer_release=true), in which case it releases each exactly once
+        // itself. An unregistered stream is always released here.
+        if (!handler || !defer_release) {
+            for (int i = 0; i < num_bufs; i++) {
+                jbpf_io_channel_release_buf(bufs[i]);
+            }
         }
     }
 };

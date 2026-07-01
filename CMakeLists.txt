@@ -55,16 +55,33 @@ FetchContent_Declare(
 set(EXPECTED_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(tl_expected)
 
-# ---- spear-libe3 (E3 agent library) ----
-# Requires libe3 to be installed: cd ../spear-libe3/build && sudo make install
+# ---- libe3 (E3 agent library) ----
+# libe3 is the `libe3/` git submodule (https://github.com/wineslab/libe3.git,
+# pinned to tag 0.0.4). build.sh builds it with BOTH encoders and installs it to
+# /usr/local before configuring this project; we consume the installed CMake
+# package (and its ASN.1 runtime headers, see src/e3sm/asn) here. To build it by
+# hand:
+#   cmake -S libe3 -B libe3/build -DLIBE3_ENABLE_ASN1=ON -DLIBE3_ENABLE_JSON=ON \
+#         -DLIBE3_BUILD_EXAMPLES=OFF -DLIBE3_BUILD_TESTS=OFF
+#   cmake --build libe3/build -j && sudo cmake --install libe3/build
 find_package(libe3 REQUIRED)
 
 # ---- E3Controller executable ----
 add_executable(e3_controller
   src/e3_controller.cpp
-  src/e3sm_spectrum.cpp
-  src/e3sm/e3sm_spect_wrapper.cpp
-  src/e3sm/bfp_decompress.cpp
+  # RF=1 Spectrum SM (PRB-blacklist / spectrum sharing)
+  src/e3sm/sm_spectrum/e3sm_spectrum.cpp
+  src/e3sm/sm_spectrum/e3sm_spect_wrapper.cpp
+  # RF=2 L1-KPM SM (NVIDIA-Aerial-conformant indications)
+  src/e3sm/l1_kpm/e3sm_layer_1.cpp
+  src/e3sm/l1_kpm/e3sm_layer1_wrapper.cpp
+  src/e3sm/l1_kpm/e3sm_layer1_json.cpp
+  # shared data plane
+  src/e3sm/iq_pipeline.cpp
+  src/e3sm/slot_iq_pipeline.cpp
+  # writers + decompression
+  src/e3sm/utils/e3sm_shm_writer.cpp
+  src/e3sm/utils/bfp_decompress.cpp
 )
 
 # Include paths: our own headers + jbpf headers
@@ -76,11 +93,13 @@ target_include_directories(e3_controller PRIVATE
   ${CMAKE_SOURCE_DIR}/jbpf/src/logger
   ${CMAKE_SOURCE_DIR}/jbpf/src/common
   ${OUTPUT_DIR}/inc
+  ${CMAKE_SOURCE_DIR}/jbpf/src/lcm
 )
 
 # Link against jbpf_io (transitively brings mem_mgmt, logger, ck, mimalloc)
 target_link_libraries(e3_controller PRIVATE
   jbpf::io_lib
+  jbpf::lcm_ipc_lib
   e3sm_asn
   libe3::libe3
   pthread
