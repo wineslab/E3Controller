@@ -4,87 +4,80 @@ A standalone C++ daemon that bridges ocudu's jbpf shared memory (IPC primary) wi
 
 The controller serves **one** wire encoding at a time (selected with `--encoding`), over a configurable link layer (`--link-layer`) and transport (`--transport`).
 
-## Prerequisites
-
-- CMake ≥ 3.16
-- GCC/G++ with C++17 support
-- pkg-config
-- yaml-cpp (`libyaml-cpp-dev`)
-- Boost (`libboost-dev`, `libboost-program-options-dev`, `libboost-filesystem-dev`) — needed by jbpf
-- [mouse07410/asn1c](https://github.com/mouse07410/asn1c) — ASN.1 compiler with APER support
-- [libe3](https://github.com/wineslab/libe3) — git submodule, built + installed system-wide (see below)
-- [nlohmann/json](https://github.com/nlohmann/json) ≥ 3.11 — JSON encoder (header-only; install system-wide, or let libe3's FetchContent pull it when online)
-- ZeroMQ (`libzmq3-dev`)
-
-
-
-### libe3 (git submodule)
-
-`libe3` is vendored as the [`libe3/`](https://github.com/wineslab/libe3) git
-submodule, pinned to tag **0.0.6**. It is built with **both** encoders (so the
-controller's `--encoding` flag is a pure runtime choice) and installed
-system-wide. `build.sh` does this for you (step 3 below). Building both encoders
-requires `nlohmann_json` ≥ 3.11 (JSON) and `asn1c` (ASN.1).
-
-
 ## Build
 
-The build chain is **libe3 (build + install) → jbpf → E3Controller**. The
-simplest path is the top-level `build.sh`, which runs it in order:
+Everything goes through the top-level [`build.sh`](build.sh). Two modes:
 
 ```bash
 git clone --recurse-submodules git@github.com:wineslab/E3Controller.git
 cd E3Controller
-./build.sh                 # JOBS=<n> ./build.sh to set parallelism
+
+# Fresh Debian/Ubuntu machine (installs every dep first, then builds):
+./build.sh --install-deps
+
+# Machine that already has the toolchain in place:
+./build.sh
 ```
 
-`build.sh` will:
-1. `git submodule update --init --recursive` (fetches libe3 @ 0.0.6 and jbpf)
-2. init + patch jbpf's 3p submodules (`jbpf/init_and_patch_submodules.sh`)
-3. configure libe3, stage asn1c's `BOOLEAN.*` skeletons into `libe3/build/messages/`
-   (toolchain workaround, see above), then build + `sudo cmake --install` to `/usr/local`
-   (`-DLIBE3_ENABLE_ASN1=ON -DLIBE3_ENABLE_JSON=ON -DLIBE3_BUILD_EXAMPLES=OFF -DLIBE3_BUILD_TESTS=OFF`)
-4. configure + build the E3Controller (jbpf is built in-tree via `add_subdirectory`)
+The binary lands at `out/bin/e3_controller`.
 
-The binary is output to `out/bin/e3_controller`.
+### `--install-deps` (or `-d`)
 
-<details><summary>Manual build (equivalent steps)</summary>
+Use this on a clean Debian/Ubuntu install (24.04 tested; 22.04 works with the
+source fallback for nlohmann_json). The flag drives a **step 0** that runs
+before the normal build and needs `apt-get`. The script uses `sudo` when it is
+not run as root; on minimal container images that ship without `sudo` it
+installs the `sudo` package first so the delegation below can succeed.
 
-##### Installing asn1c (mouse07410 fork)
+Step 0 does, in order:
 
-```bash
-sudo apt-get install -y bison flex
-git clone https://github.com/mouse07410/asn1c.git
-cd asn1c
-test -f configure || autoreconf -iv
-./configure
-make -j$(nproc)
-sudo make install
-```
+1. `apt-get update`; installs `sudo` if we are root and it is missing.
+2. `git submodule update --init libe3` so libe3's own installer is present.
+3. **Delegates to `libe3/build_libe3 -I`.** libe3's helper already knows the
+   full dependency set (apt: `build-essential`, `cmake`, `pkg-config`, `git`,
+   `ninja-build`, `autoconf`, `automake`, `libtool`, `m4`, `bison`, `flex`,
+   `libzmq3-dev`, `nlohmann-json3-dev`, `libsctp-dev`) and builds `asn1c` from
+   the `mouse07410` fork at the exact commit libe3's E3AP grammar expects,
+   installing it under `/opt/asn1c/`.
+4. Adds the extras libe3 does not pull in but the E3Controller / jbpf build
+   needs: `python3`, `python3-pip`, `python3-dev`, `file`, `ca-certificates`.
+5. Puts `/opt/asn1c/bin` on `PATH` so `cmake` finds `asn1c` in the same shell
+   without a manual export.
 
-```bash
-git submodule update --init --recursive
-( cd jbpf && bash ./init_and_patch_submodules.sh )
+On non-Debian distros the flag refuses to run — install the equivalent
+packages by hand and re-run `./build.sh` without `--install-deps`.
 
-# libe3 (both encoders) -> /usr/local  (examples/tests off; no patches needed @ 0.0.6)
-cmake -S libe3 -B libe3/build -DLIBE3_ENABLE_ASN1=ON -DLIBE3_ENABLE_JSON=ON \
-      -DLIBE3_BUILD_EXAMPLES=OFF -DLIBE3_BUILD_TESTS=OFF
-# Toolchain: stock libe3 lists BOOLEAN.* that this asn1c fork won't emit for its
-# BOOLEAN-free E3AP grammar — stage asn1c's skeletons in:
-for f in BOOLEAN.c BOOLEAN.h BOOLEAN_aper.c BOOLEAN_print.c BOOLEAN_rfill.c BOOLEAN_uper.c BOOLEAN_xer.c; do
-  cp /opt/asn1c/share/asn1c/$f libe3/build/messages/
-done
-cmake --build libe3/build -j$(nproc)
-sudo cmake --install libe3/build
+### What the normal build steps do
 
-# E3Controller (jbpf built in-tree)
-cmake -S . -B build -DINITIALIZE_SUBMODULES=OFF
-cmake --build build -j$(nproc) --target e3_controller
-```
+Whether or not `--install-deps` was used, `build.sh` then runs:
 
-You can still build a single-encoder libe3 (`-DLIBE3_ENABLE_JSON=OFF` or
-`-DLIBE3_ENABLE_ASN1=OFF`); in that case the controller's `--encoding` must match.
-</details>
+1. `git submodule update --init --recursive` (fetches libe3 @ tag `0.0.6` and
+   jbpf).
+2. `jbpf/init_and_patch_submodules.sh` to bring in jbpf's third-party
+   dependencies.
+3. Configure + build libe3 with both encoders
+   (`-DLIBE3_ENABLE_ASN1=ON -DLIBE3_ENABLE_JSON=ON -DLIBE3_BUILD_EXAMPLES=OFF
+   -DLIBE3_BUILD_TESTS=OFF`), stage `asn1c`'s `BOOLEAN.*` skeletons into
+   `libe3/build/messages/` (toolchain shim — libe3's E3AP grammar does not use
+   `BOOLEAN` and the `mouse07410` fork skips them, so we supply the reference
+   copies), then `sudo cmake --install libe3/build` to `/usr/local`.
+4. Configure + build the E3Controller; jbpf is compiled in-tree via
+   `add_subdirectory`.
+
+The `--encoding` flag on the resulting binary is a pure runtime choice because
+libe3 is built with both encoders.
+
+### Overrides & re-runs
+
+- `JOBS=N ./build.sh` — parallelism (defaults to `nproc`).
+- `ASN1C_SKELETON_DIR=<dir> ./build.sh` — override where `BOOLEAN.*` are
+  copied from. Default probe order is
+  `/opt/asn1c/share/asn1c` → `/usr/local/share/asn1c` → `/usr/share/asn1c`.
+- If you re-build without `--install-deps` on a host where the earlier run
+  put `asn1c` under `/opt/asn1c/`, the script re-adds `/opt/asn1c/bin` to
+  `PATH` automatically before invoking `cmake`.
+- `rm -rf libe3/build` before re-running is enough to force the `BOOLEAN.*`
+  shim to re-stage; `cmake` picks the rest up incrementally.
 
 ### ASN.1 Code Generation
 
@@ -142,7 +135,7 @@ Both timing logs are **off by default** and enabled by passing a path:
 - `--stats-log <path>` — written by `E3SMLayer1` (controller side). One row per
   published UL slot: `slot_seq, gnb_to_codelet_us, codelet_to_dispatch_us,
   dispatch_to_handler_us, shm_ns, encode_ns, emit_ns, nof_subc, iq_bytes`.
-- (*not supported by libe3*)`--pub-stages-log <path>` — written by libe3's RAN outbound loop. One row per
+- `--pub-stages-log <path>` — written by libe3's RAN outbound loop. One row per
   SM-emitted PDU: `message_id, queue_us, encode_us, zmq_send_us, t_sent_us`.
   (Plumbed into `E3Config.pub_stages_log_path`; libe3 also honours the
   `LIBE3_PUB_STAGES_LOG_PATH` env var as a fallback.)
