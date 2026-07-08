@@ -4,6 +4,8 @@ A standalone C++ daemon that bridges ocudu's jbpf shared memory (IPC primary) wi
 
 The controller serves **one** wire encoding at a time (selected with `--encoding`), over a configurable link layer (`--link-layer`) and transport (`--transport`).
 
+> To use this E3Controller you need to build and run [this version](https://github.com/wineslab/ocudu-e3) of OCUDU.
+
 ## Build
 
 Everything goes through the top-level [`build.sh`](build.sh). Two modes:
@@ -144,24 +146,7 @@ The two join end-to-end by `message_id`: `statistics`'s `emit_ns` is the SM-side
 enqueue cost and `pub-stages`'s `queue_us`/`encode_us`/`zmq_send_us` pick up
 where it leaves off.
 
-### Example
-
-```bash
-# Terminal 1: Start E3Controller (ASN.1/APER over TCP, 106 PRBs, ~40 MHz BW)
-./out/bin/e3_controller --ipc-name e3_controller --encoding asn1 --num-prbs 106 \
-    --codelet-path codelets
-
-# …or for a JSON/cuBB (NVIDIA-Aerial) dApp on RF=2 (libe3 built with
-# -DLIBE3_ENABLE_JSON=ON), serving the NVIDIA_L1 port triple, both timing logs on:
-./out/bin/e3_controller --encoding json \
-    --setup-port 5555 --publisher-port 5556 --subscriber-port 5557 \
-    --num-prbs 106 --codelet-path codelets \
-    --stats-log statistics_layer1.log --pub-stages-log libe3_pub_stages.log
-
-# Terminal 2: Start ocudu with the jbpf agent pointing to "e3_controller".
-# The controller auto-loads the matching codelet (via LCM IPC) on the first dApp
-# subscribe: RF=1 → ecpri_iq_samples, RF=2 → uplink_slot_samples.
-```
+An example on how to run it it's available [here](start_e3controller_example.sh).
 
 ## Architecture
 
@@ -332,3 +317,6 @@ the blacklist to the RAN scheduler is not implemented. The
 [`src/e3sm/sm_spectrum/e3sm_spectrum.cpp`](src/e3sm/sm_spectrum/e3sm_spectrum.cpp)
 marks the spot. dApps that rely on the control side-effect (rather than just the
 ACK) will not see scheduler behaviour change.
+
+### Codelet Verifier
+Missing codelet verifier. This is planned as future work and will provide a framework to build and verify codelets, enabling developers to safely extend the E3Controller functionality attached to the various hooks available in OCUDU.
