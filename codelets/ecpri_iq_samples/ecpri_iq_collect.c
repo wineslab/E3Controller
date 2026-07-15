@@ -83,6 +83,33 @@ struct jbpf_load_map_def SEC("maps") prb_filter_state = {
 #define NUM_SYMBOLS   14
 #define SYMBOL_FLOOR  (SLOT_SYMBOLS - NUM_SYMBOLS)
 
+/* Absolute-slot filter (compile-time, edit-and-rebuild).
+ * At 30 kHz SCS the eCPRI radio-app header encodes slot-within-subframe
+ * in slotId (0..1) and subframe (0..9); combine them into slot-in-frame
+ * (0..19) via subframe*2 + slot. Set to -1 to disable and pass every
+ * slot. Configured for the 7D-S-2U TDD pattern: full-UL slots are
+ * {8,9,18,19}; slot 19 is the tail UL of the second half-frame. Keeping
+ * one slot per frame cuts arrival rate to 100 slots/s from ~2000. */
+#define TARGET_ABS_SLOT  19
+#define SLOTS_PER_SUBFRAME 2  /* 30 kHz SCS, numerology mu=1 */
+
+/* Exact-symbol filter (compile-time, edit-and-rebuild). Stacks on top
+ * of TARGET_ABS_SLOT: after slot 19 is picked, keep only symbol
+ * TARGET_SYMBOL_ID (0..13). Set to -1 to fall back to the range-based
+ * SYMBOL_FLOOR filter (keep the last NUM_SYMBOLS symbols). Symbol 13 is
+ * the tail UL symbol, chosen so the RU has finished delivering the full
+ * slot's payload by the time we sample. Combined with slot 19 this
+ * yields 1 codelet fire per antenna per frame = 400/s at 4T. */
+#define TARGET_SYMBOL_ID 13
+
+/* Single-antenna filter (compile-time, edit-and-rebuild). eCPRI's
+ * xtc_id field carries the "physical channel ID" (a.k.a. eAxC ID); in
+ * the Foxconn 4T4R config the UL antennas are ul_port_id [0,1,2,3].
+ * Set to -1 to keep all antennas. Stacks on top of slot+symbol filters,
+ * so with 7D-S-2U + slot 19 + symbol 13 + one antenna the arrival rate
+ * collapses to 1 codelet fire per frame (100/s). */
+#define TARGET_EAXC -1
+
 
 /* ---- Main codelet entry ---- */
 
@@ -137,6 +164,20 @@ uint64_t jbpf_main(void *state)
         return JBPF_CODELET_SUCCESS;
     }
 
+    /* --- Single-antenna filter (early drop) ---
+     * ecpri_xtc_id is __u16 in network byte order; carries the eAxC ID
+     * that maps to antenna port (ul_port_id in gnb config). Filter here
+     * before the app-hdr / section-hdr parses, so wrong-antenna packets
+     * exit with a byte-swap + compare. */
+#if TARGET_EAXC >= 0
+    {
+        uint16_t eaxc = jbpf_ntohs(ecpri_hdr->ecpri_xtc_id);
+        if (eaxc != TARGET_EAXC) {
+            return JBPF_CODELET_SUCCESS;
+        }
+    }
+#endif
+
     /* --- Parse Radio Application Common Header --- */
     struct radio_app_common_hdr *app_hdr = (struct radio_app_common_hdr *)next_hdr;
     if ((void *)(app_hdr + 1) >= pkt_end) {
@@ -144,14 +185,35 @@ uint64_t jbpf_main(void *state)
     }
     next_hdr = (__u8 *)next_hdr + sizeof(struct radio_app_common_hdr);
 
-    /* --- Symbol-count filter (early drop) ---
-     * sf_slot_sym is 16 bits network-order: [subframeId:4][slotId:6][symbolId:6]
-     * Keep symbols whose id is in the last NUM_SYMBOLS of the slot. */
+    /* --- Symbol/slot filters (early drop) ---
+     * sf_slot_sym is 16 bits network-order: [subframeId:4][slotId:6][symbolId:6].
+     * Order matters here: we drop wrong-slot packets FIRST so a full-frame
+     * of DL/other UL-slot chatter is discarded before any map lookups or
+     * verifier-heavier work below. For 7D-S-2U keeping only slot 19 that
+     * gets us from ~20 slots/frame of UL noise down to 1. */
     uint16_t sf_slot_sym = jbpf_ntohs(app_hdr->sf_slot_sym.value);
+    uint16_t subframe_id_early = (sf_slot_sym >> 12) & 0xF;
+    uint16_t slot_id_early     = (sf_slot_sym >> 6)  & 0x3F;
+    uint16_t abs_slot          = subframe_id_early * SLOTS_PER_SUBFRAME + slot_id_early;
+#if TARGET_ABS_SLOT >= 0
+    if (abs_slot != TARGET_ABS_SLOT) {
+        return JBPF_CODELET_SUCCESS;
+    }
+#endif
     uint16_t symbol_id = sf_slot_sym & 0x3F;
+#if TARGET_SYMBOL_ID >= 0
+    /* Exact-symbol match. Stacks on the slot filter above: any packet
+     * not carrying symbol TARGET_SYMBOL_ID of slot TARGET_ABS_SLOT gets
+     * dropped before we touch any maps. */
+    if (symbol_id != TARGET_SYMBOL_ID) {
+        return JBPF_CODELET_SUCCESS;
+    }
+#else
+    /* Fallback: range-based filter (keep the last NUM_SYMBOLS of the slot). */
     if (symbol_id < SYMBOL_FLOOR) {
         return JBPF_CODELET_SUCCESS;
     }
+#endif
 
     /* --- Parse Data Section Header --- */
     struct data_section_hdr *data_hdr = (struct data_section_hdr *)next_hdr;
@@ -229,6 +291,14 @@ uint64_t jbpf_main(void *state)
         return JBPF_CODELET_FAILURE;
     }
 
+    /* RAN-side hand-off timestamp piggybacked on ctx->meta_data by the
+     * hook_capture_xran_packet call site (ofh_message_receiver_impl).
+     * Read into a dedicated output field so the controller-side ABI is
+     * self-documenting. Anchor for gnb_to_codelet_us; paired with
+     * codelet_ts_ns below (stamped just before jbpf_ringbuf_output).
+     * Held in meta_data because the SDK verifier's OFH ctx descriptor is
+     * a fixed 27-byte layout — see jbpf_ran_ofh_ctx comment. */
+    out->gnb_ts_ns = ctx->meta_data;
     out->timestamp = entry_ts_us;
     out->direction = ctx->direction;
     out->frame_id = app_hdr->frame_id;  /* single byte, no endianness issue */
@@ -272,6 +342,12 @@ uint64_t jbpf_main(void *state)
         }
         out->iq_payload[i] = src[i];
     }
+
+    /* Codelet-side timestamp captured just before jbpf_ringbuf_output so
+     * (codelet_ts_ns - gnb_ts_ns) attributes hook -> codelet-dispatch cost,
+     * matching the uplink_slot_samples pipeline's stage schema.
+     * Same clock domain as ctx->gnb_ts_ns (CLOCK_REALTIME). */
+    out->codelet_ts_ns = jbpf_time_get_ns();
 
     /* --- Output --- */
     int ret = jbpf_ringbuf_output(&output_map, (void *)out, sizeof(struct iq_sample_data));

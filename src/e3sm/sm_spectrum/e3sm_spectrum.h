@@ -27,6 +27,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -34,8 +35,12 @@ class E3SMSpectrum : public libe3::ServiceModel {
 public:
     static constexpr uint32_t RAN_FUNCTION_ID = 1;
 
-    E3SMSpectrum(e3sm_pipeline::IqPipeline& pipeline, libe3::E3Agent& agent)
-        : pipeline_(pipeline), agent_(&agent) {}
+    E3SMSpectrum(e3sm_pipeline::IqPipeline& pipeline,
+                 libe3::E3Agent& agent,
+                 std::string stats_log_path = "")
+        : pipeline_(pipeline),
+          agent_(&agent),
+          stats_log_path_(std::move(stats_log_path)) {}
 
     std::string name() const override { return "Spectrum Service Model"; }
     uint32_t    version() const override { return 1; }
@@ -70,6 +75,14 @@ private:
     std::vector<int16_t>                padded_buf_;
     std::vector<uint8_t>                encoded_buf_;
     e3sm_spectrum::SpectrumIQIndication indication_;
+
+    // Per-slot RAN-side stage CSV. Mirrors E3SMLayer1's statistics_layer1.log
+    // schema (see on_sample() in the .cpp for column order). Disabled unless
+    // constructed with a non-empty path; opened lazily on first published
+    // sample so we don't create an empty file on runs that never receive one.
+    std::string   stats_log_path_;
+    std::ofstream stats_log_;
+    uint64_t      sample_publish_seq_{0};
 };
 
 #endif /* E3_SM_SPECTRUM_H */

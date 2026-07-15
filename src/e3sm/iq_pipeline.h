@@ -61,6 +61,18 @@ struct DecompressedSample {
     uint32_t recv_us{0};
     uint32_t sample_id{0};
 
+    // RAN-side stage timestamps (CLOCK_REALTIME ns) forwarded verbatim
+    // from the codelet's iq_sample_data. Consumers subtract these to
+    // report the same three-stage schema as the SlotIqPipeline
+    // (gnb_to_codelet_us / codelet_to_dispatch_us / dispatch_to_handler_us).
+    //   gnb_ts_ns      — stamped at hook fire in ofh_message_receiver_impl
+    //   codelet_ts_ns  — stamped by the codelet right before ringbuf output
+    //   dispatch_ts_ns — stamped by IqPipeline::process_buffers on the
+    //                    dispatcher poll thread (batch-shared)
+    uint64_t gnb_ts_ns{0};
+    uint64_t codelet_ts_ns{0};
+    uint64_t dispatch_ts_ns{0};
+
     // BFP decompression duration in nanoseconds — used by SMs to log
     // per-slot data-plane cost in their statistics_*.log files.
     uint64_t decompress_ns{0};
@@ -108,10 +120,25 @@ public:
     uint64_t dropped_samples() const { return dropped_.load(std::memory_order_relaxed); }
 
 private:
-    static constexpr std::size_t QUEUE_CAPACITY = 256;  // power of 2
+    // At most the codelet's jbpf ring depth (64, see ecpri_iq_collect.c
+    // `jbpf_ringbuf_map(output_map, ..., 64)`) can be un-released at once,
+    // so a matching queue never needs more entries. Power of 2 for cheap
+    // masking; larger than the ring is dead weight.
+    static constexpr std::size_t QUEUE_CAPACITY = 64;
 
     struct QueueEntry {
-        struct iq_sample_data sample;
+        // Pointer to the jbpf ring buffer (an iq_sample_data) the codelet
+        // wrote. Option A: enqueue the POINTER (zero-copy) instead of
+        // memcpy'ing the ~8 KB iq_sample_data on the poll thread. The
+        // dispatcher stream is registered with defer_release=true, so the
+        // dispatcher does NOT free this buffer; the worker releases it
+        // (jbpf_io_channel_release_buf) after the consumer fan-out.
+        // Valid from enqueue until that release.
+        void*    buf;
+        // Dispatcher-thread stamp (CLOCK_REALTIME ns), shared across the
+        // whole poll batch. Consumers subtract sample.codelet_ts_ns from
+        // this to get codelet_to_dispatch_us, matching SlotIqPipeline.
+        uint64_t dispatch_ts_ns;
         uint32_t recv_us;
         uint32_t sample_id;
     };

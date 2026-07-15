@@ -29,6 +29,15 @@
 #define JBPF_CODELET_FAILURE (-1)
 #endif
 
+/* Inline stub for the host-side native memcpy helper added to
+ * ocudu-wineslab/external/jbpf (enum JBPF_NATIVE_MEMCPY = 19, default
+ * registration in JBPF_DEFAULT_HELPER_FUNCS). Declared inline here
+ * rather than via the SDK's jbpf_helper.h so the codelet builds with
+ * the stock srs-jbpf-sdk Docker image, with the new helper ID only
+ * needing to exist on the gNB-side jbpf at codelet-load time. */
+static long (*jbpf_native_memcpy)(void *dst, const void *src, uint64_t len)
+    = (void *)19;
+
 /* ---- Maps ----
  * One output map, zero-copy via jbpf_get_output_buf / jbpf_send_output.
  * Using jbpf_output_map rather than jbpf_ringbuf_map so the codelet
@@ -37,25 +46,6 @@
  * intermediate first. One memcpy on the codelet side instead of two.
  */
 jbpf_output_map(output_map, struct uplink_slot_sample, 32);
-
-/* ---- Constants ---- */
-
-/* Chunked copy size. 128 bytes = two cache lines = 32 cbf16_t samples.
- * Picked so that:
- *  - Constant size lets __builtin_memcpy lower to a short fixed
- *    vector-move sequence the eBPF verifier handles cheaply.
- *  - 128 divides the full 4-antenna slot payload
- *    (4 * 14 * 3276 * sizeof(cbf16_t) = 733 824 bytes; 733824 / 128 =
- *    5 733 exactly), so the flat slot copy leaves no trailing tail for
- *    the 273-PRB/4-port deployment. (A grid whose payload is not a
- *    multiple of 128 would leave up to 127 bytes uncopied at the tail.)
- *  - Outer loop bound = MAX_SLOT_IQ_BYTES / 128 = 5 733 iterations,
- *    half the per-chunk bounds checks of the previous 64 B chunks
- *    (~11 466). The copy is memory-bandwidth bound, so this only trims
- *    the loop overhead, not the bulk data-movement cost.
- */
-#define COPY_CHUNK_BYTES 128
-#define MAX_COPY_CHUNKS  (MAX_SLOT_IQ_BYTES / COPY_CHUNK_BYTES)
 
 /* ---- Main codelet entry ---- */
 
@@ -104,29 +94,14 @@ uint64_t jbpf_main(void *state)
     uint32_t copy_size = (uint32_t)avail;
     out->iq_size_bytes = copy_size;
 
-    /* Chunked memcpy. The outer loop is bounded by MAX_COPY_CHUNKS at
-     * compile time; each chunk is a fixed-size memcpy the verifier
-     * lowers to a small constant instruction sequence. Bounds check
-     * per chunk against ctx->data_end (required - the verifier
-     * treats ctx->data as a packet pointer and demands per-access
-     * bounds) and against copy_size for early termination. */
-    const uint8_t *src     = (const uint8_t *)(uintptr_t)ctx->data;
-    const uint8_t *src_end = (const uint8_t *)(uintptr_t)ctx->data_end;
-
-    for (uint32_t i = 0; i < MAX_COPY_CHUNKS; i++) {
-        uint32_t off = i * COPY_CHUNK_BYTES;
-        /* Reached the end of the actual payload - leave the rest of
-         * out->iq untouched (jbpf zeros the ring slot on reserve, so
-         * untouched bytes are deterministic zeros). */
-        if (off >= copy_size) {
-            break;
-        }
-        /* Verifier safety: confirm the next full chunk is in the
-         * packet-bounded source range before reading. */
-        if (src + off + COPY_CHUNK_BYTES > src_end) {
-            break;
-        }
-        __builtin_memcpy(&out->iq[off], src + off, COPY_CHUNK_BYTES);
+    /* One host-native memcpy through the JBPF_NATIVE_MEMCPY helper,
+     * replacing the previous MAX_COPY_CHUNKS x 128 B __builtin_memcpy
+     * loop. The verifier already proved (ctx->data, ctx->data_end)
+     * forms a valid packet range above; the host-side helper
+     * additionally clamps len to JBPF_NATIVE_MEMCPY_MAX_LEN. */
+    const void *src = (const void *)(uintptr_t)ctx->data;
+    if (copy_size > 0) {
+        jbpf_native_memcpy(out->iq, src, (uint64_t)copy_size);
     }
 
     /* Stamp the codelet timestamp here so codelet_to_dispatch_us
