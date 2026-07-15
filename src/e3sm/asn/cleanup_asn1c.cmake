@@ -3,9 +3,9 @@
 # with libe3's runtime (which provides the runtime via asn1_e3ap). We keep:
 #   Spectrum-*  → RF=1 SM (in-band IQ + PRB blacklist controls)
 #   L1KPM-*     → RF=2 SM (SHM-pointer layer-1 indications)
-# BOOLEAN* is intentionally NOT kept: libe3's runtime now ships it (build.sh
-# stages asn1c's BOOLEAN skeletons into libe3), so we link asn_DEF_BOOLEAN from
-# libe3 rather than compiling a second (duplicate) copy here.
+# BOOLEAN* is intentionally NOT kept: the only type that used it,
+# Spectrum-ConfigControl, is generated but no longer compiled (see
+# CMakeLists.txt), and libe3 >= 0.0.7 does not ship a BOOLEAN runtime either.
 
 set(ASN1C_DIR "${CMAKE_BINARY_DIR}/asn1c_generated")
 if(NOT EXISTS "${ASN1C_DIR}")

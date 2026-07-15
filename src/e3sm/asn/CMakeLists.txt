@@ -89,18 +89,16 @@ set(ASN1C_SRCS
     "${ASN1C_OUTPUT_DIR}/Spectrum-IQDataIndication.c"
     "${ASN1C_OUTPUT_DIR}/Spectrum-PRBBlacklistControl.c"
     "${ASN1C_OUTPUT_DIR}/Spectrum-RanFunctionData.c"
-    "${ASN1C_OUTPUT_DIR}/Spectrum-ConfigControl.c"
     "${ASN1C_OUTPUT_DIR}/L1KPM-ShmRef.c"
     "${ASN1C_OUTPUT_DIR}/L1KPM-Indication.c"
 )
 
-# BOOLEAN: Spectrum-ConfigControl uses BOOLEAN, but we do NOT compile it here.
-# libe3's installed asn1 runtime (asn1_e3ap) now ships the BOOLEAN primitive —
-# build.sh stages asn1c's BOOLEAN.* skeletons into libe3's generated dir before
-# building libe3 (stock libe3 0.0.4 lists them but the asn1c fork doesn't emit
-# them for libe3's BOOLEAN-free E3AP grammar). So asn_DEF_BOOLEAN is resolved by
-# linking libe3 (same asn1c version => ABI-compatible, single definition). The
-# cleanup step drops our own BOOLEAN*.c accordingly.
+# Spectrum-ConfigControl is generated (it stays in the grammar for wire
+# compatibility) but deliberately NOT compiled: it is the only type that uses
+# BOOLEAN, whose runtime libe3 >= 0.0.7 no longer ships (asn_DEF_BOOLEAN would
+# be undefined at link), and the controller has no config-control code path.
+# If a ConfigControl handler is ever added, restore the source here plus a
+# BOOLEAN runtime compiled with libe3-matching ASN_DISABLE_* flags.
 
 # Static library from generated ASN.1 sources (types only, no runtime)
 add_library(e3sm_asn STATIC ${ASN1C_SRCS})

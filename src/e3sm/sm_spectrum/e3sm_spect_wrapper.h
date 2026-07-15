@@ -27,12 +27,6 @@ struct SpectrumPRBBlacklistControl {
     int validity_period;         // Validity in seconds (1..3600)
 };
 
-struct SpectrumConfigControl {
-    int noise_floor_threshold;   // Noise floor threshold (-100..100)
-    int averaging_frames;        // Averaging window (1..255)
-    bool enable;                 // Enable/disable monitoring
-};
-
 struct SpectrumRanFunctionData {
     std::vector<uint8_t> name;
     int version;
@@ -44,9 +38,6 @@ bool encode_spectrum_iq_indication(const SpectrumIQIndication& in, std::vector<u
 
 // Encode Spectrum-PRBBlacklistControl into APER bytes
 bool encode_spectrum_prb_blacklist_control(const SpectrumPRBBlacklistControl& in, std::vector<uint8_t>& out);
-
-// Encode Spectrum-ConfigControl into APER bytes
-bool encode_spectrum_config_control(const SpectrumConfigControl& in, std::vector<uint8_t>& out);
 
 // Encode RAN function data into APER bytes
 bool encode_spectrum_ran_function_data(std::vector<uint8_t>& out);
