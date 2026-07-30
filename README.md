@@ -108,7 +108,7 @@ Generated files go into `build/asn1c_generated/` and are **not** tracked in git.
 | `--poll-interval <us>` | `100` | Poll interval in microseconds (ignored if `--poll-core` is set) |
 | `--poll-core <cpu>` | `-1` | Pin the polling thread to `<cpu>` and busy-poll |
 | `--worker-core <cpu>` | `-1` | Pin the SM worker (decompress/encode/emit) to `<cpu>` |
-| `--publisher-core <cpu>` | `-1` | Pin libe3's RAN outbound thread (encode + ZMQ send) to `<cpu>` (not supported) |
+| `--publisher-core <cpu>` | `-1` | Pin libe3's I/O threads (RAN outbound: encode + ZMQ send) to `<cpu>` via `E3Config.io_thread_affinity` |
 | `--num-prbs <n>` | `106` | Expected number of PRBs per OFDM symbol (used to filter out PRACH/SRS/control symbols with different PRB counts) |
 | `--lcm-socket <path>` | `/tmp/jbpf/jbpf_lcm_ipc` | LCM IPC socket for codelet loading |
 | `--codelet-path <dir>` | (none) | Base directory for codelet binaries (enables auto-loading) |
@@ -122,7 +122,6 @@ Generated files go into `build/asn1c_generated/` and are **not** tracked in git.
 | `--shm-size <bytes>` | `1073741824` (1GiB) | POSIX SHM size |
 | `--target-slot <N>` | `-1` | Forward ONLY UL slot N (absolute slot 0..19, 30 kHz SCS); `-1` forwards every UL slot |
 | `--stats-log <path>` | (disabled) | Write the per-slot RAN-side stage CSV (gnb/codelet/dispatch/handler + shm/encode/emit) |
-| `--pub-stages-log <path>` | (disabled) | Write libe3's per-PDU publisher-stage CSV (queue_us/encode_us/zmq_send_us/t_sent_us) |
 | `--help` | | Show help |
 
 > **Encoding vs. libe3 build.** When libe3 is built with both encoders
@@ -132,19 +131,11 @@ Generated files go into `build/asn1c_generated/` and are **not** tracked in git.
 
 #### Timing logs
 
-Both timing logs are **off by default** and enabled by passing a path:
+The timing log is **off by default** and enabled by passing a path:
 
 - `--stats-log <path>` — written by `E3SMLayer1` (controller side). One row per
   published UL slot: `slot_seq, gnb_to_codelet_us, codelet_to_dispatch_us,
   dispatch_to_handler_us, shm_ns, encode_ns, emit_ns, nof_subc, iq_bytes`.
-- `--pub-stages-log <path>` — written by libe3's RAN outbound loop. One row per
-  SM-emitted PDU: `message_id, queue_us, encode_us, zmq_send_us, t_sent_us`.
-  (Plumbed into `E3Config.pub_stages_log_path`; libe3 also honours the
-  `LIBE3_PUB_STAGES_LOG_PATH` env var as a fallback.)
-
-The two join end-to-end by `message_id`: `statistics`'s `emit_ns` is the SM-side
-enqueue cost and `pub-stages`'s `queue_us`/`encode_us`/`zmq_send_us` pick up
-where it leaves off.
 
 An example on how to run it it's available [here](start_e3controller_example.sh).
 

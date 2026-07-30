@@ -186,12 +186,6 @@ struct E3ControllerConfig {
     // handler durations + shm/encode/emit costs). Empty = no log.
     std::string stats_log_path;
 
-    // Per-PDU publisher-stage CSV written by libe3's RAN outbound loop
-    // (message_id,queue_us,encode_us,zmq_send_us,t_sent_us). Picks up where
-    // stats-log's emit_ns leaves off: queue wait, E3AP encode, ZMQ send.
-    // Empty = no log.
-    std::string pub_stages_log_path;
-
     // Optional single-slot filter. The value is the absolute slot index within
     // a 10 ms frame (0..19 for 30 kHz SCS, 0..9 for 15 kHz). UL symbols whose
     // computed (subframe_id*2 + slot_id) doesn't match are dropped at the top
@@ -231,9 +225,6 @@ static void print_usage(const char* prog)
                 "  --stats-log <path>    Write the per-slot RAN-side stage CSV to <path>\n"
                 "                          (gnb/codelet/dispatch/handler + shm/encode/emit).\n"
                 "                          Default: disabled.\n"
-                "  --pub-stages-log <path>  Write libe3's per-PDU publisher-stage CSV to\n"
-                "                          <path> (queue_us/encode_us/zmq_send_us/t_sent_us).\n"
-                "                          Default: disabled.\n"
                 "  --help                Show this help\n",
                 prog);
 }
@@ -255,7 +246,6 @@ static E3ControllerConfig parse_args(int argc, char** argv)
         OPT_SHM_SIZE,
         OPT_TARGET_SLOT,
         OPT_STATS_LOG,
-        OPT_PUB_STAGES_LOG,
     };
 
     static struct option long_options[] = {
@@ -279,7 +269,6 @@ static E3ControllerConfig parse_args(int argc, char** argv)
         {"shm-size",        required_argument, nullptr, OPT_SHM_SIZE},
         {"target-slot",     required_argument, nullptr, OPT_TARGET_SLOT},
         {"stats-log",       required_argument, nullptr, OPT_STATS_LOG},
-        {"pub-stages-log",  required_argument, nullptr, OPT_PUB_STAGES_LOG},
         {"help",            no_argument,       nullptr, 'h'},
         {nullptr,           0,                 nullptr,  0 }
     };
@@ -379,9 +368,6 @@ static E3ControllerConfig parse_args(int argc, char** argv)
         case OPT_STATS_LOG:
             config.stats_log_path = optarg;
             break;
-        case OPT_PUB_STAGES_LOG:
-            config.pub_stages_log_path = optarg;
-            break;
         case 'h':
         default:
             print_usage(argv[0]);
@@ -412,13 +398,10 @@ int main(int argc, char** argv)
     agentConfig.publisher_port  = config.publisher_port;
     agentConfig.subscriber_port = config.subscriber_port;
     agentConfig.log_level = 5;  // 0=none, 1=err, 2=warn, 3=info, 4=debug, 5=trace
-    // Per-PDU publisher-stage CSV (see --pub-stages-log). libe3 also honours
-    // the LIBE3_PUB_STAGES_LOG_PATH env var when this is left empty.
-    agentConfig.pub_stages_log_path = config.pub_stages_log_path;
     // Pin libe3's I/O threads (the RAN outbound loop in particular — it does
     // the outer encode + zmq_send) to a dedicated core if requested. Without
-    // this the publisher gets scheduled out under load and queue_us in the
-    // publisher-stage CSV climbs into hundreds of µs.
+    // this the publisher gets scheduled out under load and it can be
+    // scheduled out for hundreds of µs.
     if (config.publisher_core >= 0) {
         agentConfig.io_thread_affinity = config.publisher_core;
     }

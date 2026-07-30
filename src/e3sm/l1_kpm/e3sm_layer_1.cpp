@@ -210,9 +210,8 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     }
 
     // Fan out one indication per subscriber. emit_ns here captures the
-    // SM-side enqueue cost (PDU build + emit_outbound). The encode + ZMQ
-    // send stages downstream are measured library-side in libe3's
-    // publisher-stage CSV (--pub-stages-log), joinable by message_id.
+    // SM-side enqueue cost (PDU build + emit_outbound); the encode + ZMQ
+    // send stages happen downstream in libe3's RAN outbound loop.
     const auto t_emit_start = clock::now();
     for (uint32_t dapp_id : subs) {
         libe3::Pdu pdu = make_indication_pdu(dapp_id, RAN_FUNCTION_ID,
