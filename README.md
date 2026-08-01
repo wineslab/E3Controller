@@ -2,7 +2,9 @@
 
 A standalone C++ daemon that bridges ocudu's jbpf shared memory (IPC primary) with the E3 protocol via [libe3](https://github.com/wineslab/libe3). It receives I/Q sample data from jbpf codelets and exposes it as E3 Service Model indications to subscribed dApps.
 
-The controller serves **one** wire encoding at a time (selected with `--encoding`), over a configurable link layer (`--link-layer`) and transport (`--transport`).
+The controller serves **one** wire encoding at a time, over a configurable link layer and
+transport. All of that — along with the radio geometry, SHM layout, jbpf IPC settings and
+thread pinning — lives in a single YAML configuration file; see [Usage](#usage).
 
 > To use this E3Controller you need to build and run [this version](https://github.com/wineslab/ocudu-e3) of OCUDU.
 
@@ -21,7 +23,8 @@ cd E3Controller
 ./build.sh
 ```
 
-The binary lands at `out/bin/e3_controller`.
+The binary lands at `out/bin/e3_controller`, and the offline codelet verifier at
+`out/bin/e3_verifier_cli`.
 
 ### `--install-deps` (or `-d`)
 
@@ -66,8 +69,8 @@ Whether or not `--install-deps` was used, `build.sh` then runs:
 4. Configure + build the E3Controller; jbpf is compiled in-tree via
    `add_subdirectory`.
 
-The `--encoding` flag on the resulting binary is a pure runtime choice because
-libe3 is built with both encoders.
+`e3.encoding` in the config is therefore a pure runtime choice, because libe3 is built
+with both encoders.
 
 ### Overrides & re-runs
 
@@ -95,49 +98,174 @@ Generated files go into `build/asn1c_generated/` and are **not** tracked in git.
 > **Important:** E3Controller (IPC primary) must start **before** ocudu (IPC secondary).
 
 ```bash
-./out/bin/e3_controller [options]
+./out/bin/e3_controller --config configs/e3_controller.yaml
 ```
 
-### Options
+`--config` is the **only** argument. It replaced 20 command-line options, deliberately:
+two configuration mechanisms invite the two to disagree, and the radio geometry has to be
+stated in exactly one place.
 
-| Option | Default | Description |
+A fully documented example ships at [`configs/e3_controller.yaml`](configs/e3_controller.yaml).
+Unknown keys are a **startup error**, not a warning — a typo'd `nof_port:` that was
+silently ignored would leave the controller sizing rows for the default while you believed
+you had configured something else.
+
+### Example
+
+100 MHz / 30 kHz SCS, 4x4, ASN.1 encoding, three pinned cores:
+
+```yaml
+# radio geometry — MUST match the running gNB (validated against it at runtime)
+radio:
+  nof_ports:   4        # UL antenna ports
+  nof_prbs:    273      # 100 MHz @ 30 kHz SCS
+  nof_symbols: 14       # per slot
+  scs_khz:     30       # also fixes slots/frame (20)
+
+# /e3_ran_buffers — owned by the controller, read by the dApp
+shm:
+  name:        /e3_ran_buffers
+  size_bytes:  1073741824      # 1 GiB
+  cbf16_scale: 1.0             # bf16 -> fp16 scale; must be > 0
+
+# must agree with the gNB's own `jbpf:` section
+jbpf:
+  ipc_name:          e3_controller
+  run_path:          /dev/shm
+  mem_size_bytes:    1073741824
+  lcm_socket_path:   /tmp/jbpf/jbpf_lcm_ipc
+  codelet_base_path: /workspace/e3_release/E3Controller/codelets
+
+e3:
+  encoding:        asn1        # asn1 | json
+  link_layer:      zmq         # zmq | posix
+  transport:       tcp         # tcp | ipc | sctp
+  setup_port:      9990
+  publisher_port:  9991
+  subscriber_port: 9999
+
+threads:
+  poll_core:        2
+  worker_core:      3
+  publisher_core:   4
+  poll_interval_us: 100        # ignored when poll_core >= 0 (busy-poll)
+
+logging:
+  stats_log_path: ""           # empty disables the per-slot stage CSV
+
+target_slot: -1                # -1 = every UL slot
+```
+
+For a **JSON / cuBB dApp** (such as `adaptive_cpu`), change the `e3:` section — the port
+convention differs, so keep one config file per encoding rather than trying to override
+individual values at launch:
+
+```yaml
+e3:
+  encoding:        json
+  link_layer:      zmq
+  transport:       tcp
+  setup_port:      5555
+  publisher_port:  5556
+  subscriber_port: 5557
+```
+
+For a **2x2** deployment, only `radio.nof_ports` changes — the row stride, header and all
+derived sizes follow from it, with no recompile:
+
+```yaml
+radio:
+  nof_ports:   2
+  nof_prbs:    273
+  nof_symbols: 14
+  scs_khz:     30
+```
+
+### Configuration
+
+| Section | Keys | Notes |
 |---|---|---|
-| `--ipc-name <name>` | `e3_controller` | IPC shared memory segment name |
-| `--run-path <path>` | `/dev/shm` | jbpf run path |
-| `--mem-size <bytes>` | `1073741824` (1GB) | Shared memory size |
-| `--poll-interval <us>` | `100` | Poll interval in microseconds (ignored if `--poll-core` is set) |
-| `--poll-core <cpu>` | `-1` | Pin the polling thread to `<cpu>` and busy-poll |
-| `--worker-core <cpu>` | `-1` | Pin the SM worker (decompress/encode/emit) to `<cpu>` |
-| `--publisher-core <cpu>` | `-1` | Pin libe3's I/O threads (RAN outbound: encode + ZMQ send) to `<cpu>` via `E3Config.io_thread_affinity` |
-| `--num-prbs <n>` | `106` | Expected number of PRBs per OFDM symbol (used to filter out PRACH/SRS/control symbols with different PRB counts) |
-| `--lcm-socket <path>` | `/tmp/jbpf/jbpf_lcm_ipc` | LCM IPC socket for codelet loading |
-| `--codelet-path <dir>` | (none) | Base directory for codelet binaries (enables auto-loading) |
-| `--encoding <name>` | `asn1` | Wire encoding for the E3 channel: `asn1` or `json`. Runtime-switchable when libe3 is built with both encoders. |
-| `--link-layer <name>` | `zmq` | Link layer: `zmq` or `posix` |
-| `--transport <name>` | `tcp` | Transport: `tcp`, `ipc`, or `sctp` |
-| `--setup-port <p>` | `9990` | E3 channel setup REP port |
-| `--publisher-port <p>` | `9991` | E3 channel indication PUB port |
-| `--subscriber-port <p>` | `9999` | E3 channel control SUB port |
-| `--shm-name <name>` | `/e3_ran_buffers` | POSIX SHM name for IQ data |
-| `--shm-size <bytes>` | `1073741824` (1GiB) | POSIX SHM size |
-| `--target-slot <N>` | `-1` | Forward ONLY UL slot N (absolute slot 0..19, 30 kHz SCS); `-1` forwards every UL slot |
-| `--stats-log <path>` | (disabled) | Write the per-slot RAN-side stage CSV (gnb/codelet/dispatch/handler + shm/encode/emit) |
-| `--help` | | Show help |
+| `radio` | `nof_ports`, `nof_prbs`, `nof_symbols`, `scs_khz` | **Must match the running gNB.** Validated against the RAN — see below. |
+| `shm` | `name`, `size_bytes`, `cbf16_scale` | The `/e3_ran_buffers` region the controller owns and the dApp reads |
+| `jbpf` | `ipc_name`, `run_path`, `mem_size_bytes`, `lcm_socket_path`, `codelet_base_path` | Must agree with the gNB's own `jbpf:` YAML section |
+| `e3` | `encoding`, `link_layer`, `transport`, `setup_port`, `publisher_port`, `subscriber_port` | `encoding` is `asn1` or `json`; JSON/cuBB dApps expect ports 5555/5556/5557 |
+| `threads` | `poll_core`, `worker_core`, `publisher_core`, `poll_interval_us` | `-1` = no pinning (the poll thread then sleeps rather than busy-spinning) |
+| `logging` | `stats_log_path` | Empty disables the per-slot stage CSV |
+| *(top level)* | `target_slot` | Forward only this slot index within a 10 ms frame; `-1` forwards every UL slot |
+
+#### Radio geometry is checked, not trusted
+
+`radio:` has to be declared up front because the SHM region must exist and be sized before
+the codelet can be loaded. But the RAN is the real source of truth: the per-slot hook
+context carries `nof_ports` / `nof_symbols` / `nof_subcarriers`, so the controller compares
+your configuration against the first slot it receives and **refuses to publish on a
+mismatch**, naming both sides.
+
+The two directions are not symmetric, which is why the check exists:
+
+- Declaring **fewer** ports than the gNB sends is already safe — the gNB-side publish
+  helper refuses the oversized slot and the codelet reports it.
+- Declaring **more** is what needs catching: the surplus antennas are written as silence,
+  and the dApp cannot distinguish that from a genuinely quiet antenna. A plausible-looking
+  wrong spectrum, with nothing to notice.
+
+> **`E3_CBF16_SCALE` no longer has any effect.** The bf16 -> fp16 scale moved into
+> `shm.cbf16_scale`, because the gNB-side publish helper needs the *same* value and a
+> disagreement would produce different rows with no error at all — bf16 and fp16 are both
+> 2 bytes, so a wrong scale is silently wrong data rather than a failure.
 
 > **Encoding vs. libe3 build.** When libe3 is built with both encoders
 > (the recommended build — see [libe3 (git submodule)](#libe3-git-submodule)),
-> `--encoding` is a pure runtime choice. If libe3 was built with only one
-> encoder, `--encoding` must match it, or the outbound encoder rejects every PDU.
+> `e3.encoding` is a pure runtime choice. If libe3 was built with only one
+> encoder, it must match, or the outbound encoder rejects every PDU.
 
 #### Timing logs
 
-The timing log is **off by default** and enabled by passing a path:
+Off by default; enabled by setting `logging.stats_log_path`. Written by `E3SMLayer1`, one
+row per published UL slot: `slot_seq, gnb_to_codelet_us, codelet_to_dispatch_us,
+dispatch_to_handler_us, shm_ns, encode_ns, emit_ns, nof_subc, iq_bytes`.
 
-- `--stats-log <path>` — written by `E3SMLayer1` (controller side). One row per
-  published UL slot: `slot_seq, gnb_to_codelet_us, codelet_to_dispatch_us,
-  dispatch_to_handler_us, shm_ns, encode_ns, emit_ns, nof_subc, iq_bytes`.
+An example launcher is available [here](start_e3controller_example.sh).
 
-An example on how to run it it's available [here](start_e3controller_example.sh).
+## Codelets
+
+The jbpf codelets are built and verified **in this repository**, under
+[`codelets/`](codelets/) — there is no longer any dependency on an external SDK tree.
+
+```bash
+cd codelets
+make            # build + verify every codelet
+make verify     # re-verify existing objects
+make show-config  # resolved paths, [ok]/[MISSING] per include root
+```
+
+Requires `clang` with the BPF target, and `e3_verifier_cli` from the main build. The
+context contract (`jbpf_srsran_contexts.h`) is imported from the ocudu checkout rather than
+copied — point `OCUDU_DIR` at it if it is not a sibling of this repo:
+
+```bash
+make OCUDU_DIR=/path/to/ocudu-e3
+```
+
+`make check-contract` fails if a local copy has drifted from ocudu's.
+
+### Verification is mandatory
+
+`make` **fails** if a codelet does not verify, and that is not belt-and-braces: the gNB
+does no verification at load time. jbpf's load path is `ubpf_load_elf_ex` followed by
+`ubpf_compile`, PREVAIL is not on it, and ubpf's JIT emits no memory bounds checks — only
+its interpreter does, and jbpf uses the JIT. So this build step is the only memory-safety
+gate these codelets ever pass through.
+
+`codelets/verifier/e3_verifier_cli.cpp` registers the ocudu program types and the E3 helper
+prototypes on top of jbpf's built-ins, deriving its context descriptors with `offsetof`
+from ocudu's own header so the contract has one source of truth. It replaces the SDK
+image's `srsran_verifier_cli`, which models only the 27-byte `jbpf_ran_ofh_ctx` and
+therefore cannot verify the per-slot codelet at all.
+
+Helper and program-type IDs live in [`codelets/include/jbpf_e3_ids.h`](codelets/include/jbpf_e3_ids.h),
+shared by the codelets, the verifier, and the gNB-side helper registration. If those three
+disagree, a codelet that verifies cleanly still fails to load.
 
 ## Architecture
 
@@ -285,7 +413,7 @@ wineslab's own and is not part of NVIDIA's schema.
 ### Single encoding per process
 
 The controller serves exactly **one** wire encoding at a time, fixed at startup
-by `--encoding` (libe3 is built with both encoders, so this is a runtime choice
+by `e3.encoding` (libe3 is built with both encoders, so this is a runtime choice
 — see [libe3 (git submodule)](#libe3-git-submodule)). To serve both an ASN.1 dApp and a
 JSON dApp simultaneously, run two controller instances on different port triples.
 This is the deliberate simplification from the earlier dual-channel design: with
@@ -294,8 +422,8 @@ fan-out simply read `E3Agent::config().encoding` — no per-dApp encoding lookup
 no race during simultaneous setup.
 
 Note that **RF=1 Spectrum is ASN.1/APER-only** — there is no JSON encoder for its
-in-band IQ indication, so it is only useful under `--encoding asn1` (under
-`--encoding json` the SM warns once and drops indications). **RF=2 L1-KPM**
+in-band IQ indication, so it is only useful under `e3.encoding: asn1` (under
+`json` the SM warns once and drops indications). **RF=2 L1-KPM**
 supports both encodings.
 
 ### PRB blacklist control is a stub
@@ -309,5 +437,13 @@ the blacklist to the RAN scheduler is not implemented. The
 marks the spot. dApps that rely on the control side-effect (rather than just the
 ACK) will not see scheduler behaviour change.
 
-### Codelet Verifier
-Missing codelet verifier. This is planned as future work and will provide a framework to build and verify codelets, enabling developers to safely extend the E3Controller functionality attached to the various hooks available in OCUDU.
+### No verification at codelet load time
+
+Codelets are verified **offline**, at build time (see [Codelets](#codelets)). The gNB does
+not re-verify on load: jbpf JIT-compiles with ubpf, which emits no memory bounds checks. So
+an object that bypasses `make` — hand-copied onto a pod, say — is loaded unchecked.
+
+Mitigations in place: `make` refuses to replace a codelet object that does not verify, and
+the gNB-side publish helper range-checks its source pointer at runtime against a window the
+hook publishes, independently of whether the codelet was verified. A load-time
+`jbpf_verify()` call before the LCM request is the remaining gap.

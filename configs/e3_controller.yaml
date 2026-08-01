@@ -1,0 +1,93 @@
+# E3Controller configuration.
+#
+# This is the only argument the controller takes:  e3_controller --config <this file>
+#
+# Unknown keys are a startup ERROR, not a warning. A typo'd `nof_port:` that was
+# silently ignored would leave the controller sizing rows for the default while
+# you believed you had configured something else — which is the exact failure
+# this file exists to prevent.
+
+# ---------------------------------------------------------------------------
+# Radio geometry — MUST match the running gNB.
+#
+# Checked, not trusted: the controller compares these against the geometry the
+# RAN reports in the first slot (jbpf_ran_slot_ctx carries nof_ports /
+# nof_symbols / nof_subcarriers) and refuses to publish on a mismatch.
+#
+# The asymmetry worth knowing: declaring FEWER ports than the gNB sends is
+# already safe (the gNB-side helper refuses and the codelet flags it). Declaring
+# MORE is what needs the check — the surplus antennas get written as silence and
+# the dApp cannot tell them from a genuinely quiet antenna.
+# ---------------------------------------------------------------------------
+radio:
+  nof_ports:   4       # UL antenna ports (1..8)
+  nof_prbs:    273     # 100 MHz @ 30 kHz SCS
+  nof_symbols: 14      # per slot (12 or 14)
+  scs_khz:     30      # 15 | 30 | 60 | 120 — also fixes slots/frame (20 @ 30 kHz)
+
+# ---------------------------------------------------------------------------
+# /e3_ran_buffers — the region the controller OWNS and the dApp reads.
+# Layout matches SharedMemoryHeader in the NVIDIA L1 KPM SM / cuBB contract.
+# ---------------------------------------------------------------------------
+shm:
+  name:        /e3_ran_buffers
+  size_bytes:  1073741824   # 1 GiB
+
+  # bf16 -> fp16 scale, applied when converting the resource grid to the row.
+  # Was the E3_CBF16_SCALE environment variable; it lives here now because the
+  # gNB-side publish helper needs the SAME value (pushed down via e3_shm_cfg),
+  # and a disagreement would produce different rows with no error at all —
+  # bf16 and fp16 are both 2 bytes, so a wrong scale is silently wrong data.
+  #
+  # Must be > 0. Zero or negative zeroes the row and breaks the dApp silently.
+  cbf16_scale: 1.0
+
+# ---------------------------------------------------------------------------
+# jbpf IPC. Must agree with the gNB's own `jbpf:` YAML section.
+# ---------------------------------------------------------------------------
+jbpf:
+  ipc_name:          e3_controller
+  run_path:          /dev/shm
+  mem_size_bytes:    1073741824
+  lcm_socket_path:   /tmp/jbpf/jbpf_lcm_ipc
+  # Directory holding the codeletsets. Resolved by the LCM load request, so it
+  # must be the path as seen by the gNB. Empty disables auto-loading.
+  codelet_base_path: /workspace/e3_release/E3Controller/codelets
+
+# ---------------------------------------------------------------------------
+# E3 channel. One encoding is served at a time; dApps must speak the same one.
+# ASN.1 (APER) is the O-RAN default; JSON matches the cuBB convention the
+# adaptive_cpu dApp uses (with ports 5555/5556/5557).
+# ---------------------------------------------------------------------------
+e3:
+  encoding:        asn1   # asn1 | json
+  link_layer:      zmq    # zmq | posix
+  transport:       tcp    # tcp | ipc | sctp
+  setup_port:      9990
+  publisher_port:  9991
+  subscriber_port: 9999
+
+# ---------------------------------------------------------------------------
+# Thread placement. -1 = no pinning (the poll thread then sleeps between polls
+# rather than busy-spinning).
+# ---------------------------------------------------------------------------
+threads:
+  poll_core:        -1
+  worker_core:      -1
+  publisher_core:   -1
+  poll_interval_us: 100
+
+logging:
+  # Per-slot RAN-side stage CSV (gnb -> codelet -> dispatch -> handler, plus
+  # shm/encode/emit costs). Empty disables it.
+  stats_log_path: ""
+
+# ---------------------------------------------------------------------------
+# Legacy controller-side single-slot filter: slot index within a 10 ms frame
+# (0..slots_per_frame()-1). -1 disables.
+#
+# Note this drops the slot AFTER the RAN has already converted and published it,
+# so it saves the controller work and the RAN nothing. Workstream F's
+# codelet-side slot_mask supersedes it by deciding before any data moves.
+# ---------------------------------------------------------------------------
+target_slot: -1

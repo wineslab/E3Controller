@@ -38,6 +38,7 @@ extern "C" {
 #include "jbpf_mem_mgmt.h"
 }
 
+#include "e3_config.h"
 #include "jbpf_dispatcher.h"
 #include "e3sm/sm_spectrum/e3sm_spectrum.h"
 #include "e3sm/l1_kpm/e3sm_layer_1.h"
@@ -137,273 +138,76 @@ static void signal_handler(int signo)
 // }
 
 // ---- Configuration ----
-
-struct E3ControllerConfig {
-    std::string ipc_name = "e3_controller";
-    std::string run_path = "/dev/shm";
-    size_t mem_size = JBPF_HUGEPAGE_SIZE_1GB;
-    int poll_interval_us = 100;  // microseconds between polls (ignored when poll_core >= 0)
-    int poll_core = -1;          // CPU to pin the polling thread to (-1 = no pinning, sleep-based)
-    int worker_core = -1;        // CPU to pin the SM worker thread to (-1 = no pinning)
-    int publisher_core = -1;     // CPU to pin libe3's publisher_thread_ to (-1 = no pinning)
-    uint16_t num_prbs = 106;     // expected number of PRBs per symbol
-    std::string lcm_socket_path = "/tmp/jbpf/jbpf_lcm_ipc";  // LCM IPC socket for codelet loading
-    std::string codelet_base_path;  // base dir for codelet binaries (empty = no auto-loading)
-
-    // Wire encoding for the (single) E3 channel. The controller serves exactly
-    // one encoding at a time; dApps must speak the same one. ASN.1 (APER) is
-    // the O-RAN default; JSON matches the NVIDIA_L1 cuBB convention used by the
-    // adaptive_cpu dApp.
-    //
-    // libe3 is built with BOTH encoders (LIBE3_ENABLE_ASN1 + LIBE3_ENABLE_JSON),
-    // so this is a pure runtime choice — the encoder factory picks the matching
-    // encoder. (If libe3 was instead built with only one encoder, this must
-    // match it or the outbound encoder rejects the PDU.)
-    libe3::EncodingFormat encoding = libe3::EncodingFormat::ASN1;
-
-    // Link layer libe3 uses to move E3AP PDUs. ZMQ is the default (and the only
-    // one exercised here); POSIX selects raw sockets.
-    libe3::E3LinkLayer link_layer = libe3::E3LinkLayer::ZMQ;
-
-    // Transport under the link layer. TCP matches what most dApps expect
-    // (host+ports); IPC uses UNIX-domain sockets for a same-host dApp; SCTP is
-    // the O-RAN standard.
-    libe3::E3TransportLayer transport = libe3::E3TransportLayer::TCP;
-
-    // E3 channel ports (libe3 defaults; for a JSON/cuBB dApp use 5555/5556/5557).
-    uint16_t setup_port = 9990;
-    uint16_t publisher_port = 9991;
-    uint16_t subscriber_port = 9999;
-
-    // POSIX SHM segment for IQ data. Layout matches SharedMemoryHeader in
-    // spear-aerial-sample-apps' e3_manager.h so the dApp reads our data with no
-    // code change.
-    std::string shm_name = "/e3_ran_buffers";
-    size_t shm_size = static_cast<size_t>(1) << 30;  // 1 GiB
-
-    // --- Timing logs (all disabled unless a path is given) ---
-    // Per-slot RAN-side stage CSV written by E3SMLayer1 (gnb→codelet→dispatch→
-    // handler durations + shm/encode/emit costs). Empty = no log.
-    std::string stats_log_path;
-
-    // Optional single-slot filter. The value is the absolute slot index within
-    // a 10 ms frame (0..19 for 30 kHz SCS, 0..9 for 15 kHz). UL symbols whose
-    // computed (subframe_id*2 + slot_id) doesn't match are dropped at the top
-    // of process_sample_json — no BFP decompress, no slot accumulation. -1
-    // (default) disables the filter and every UL slot is forwarded.
-    // NOTE: assumes 30 kHz SCS (2 slots/subframe). For a different numerology
-    // the divider would need to change.
-    int target_slot = -1;
-};
+//
+// The controller is configured by a single YAML file. This replaced 20
+// command-line options; `--config` is deliberately the only argument, because
+// two configuration mechanisms invite the two to disagree, and the radio
+// geometry in that file has to be the one place it is stated.
+//
+// See include/e3_config.h for the schema and for why the geometry is treated as
+// a bootstrap that gets validated against the RAN rather than as truth.
 
 static void print_usage(const char* prog)
 {
-    std::printf("Usage: %s [options]\n"
-                "Options:\n"
-                "  --ipc-name <name>     IPC shared memory name (default: e3_controller)\n"
-                "  --run-path <path>     jbpf run path (default: /dev/shm)\n"
-                "  --mem-size <bytes>    Shared memory size in bytes (default: 1GB)\n"
-                "  --poll-interval <us>  Poll interval in microseconds (default: 100; ignored if --poll-core is set)\n"
-                "  --poll-core <cpu>     Pin the polling thread to <cpu> and busy-poll (default: -1, no pinning)\n"
-                "  --worker-core <cpu>   Pin the SM worker (decompress/encode/emit) to <cpu> (default: -1, no pinning)\n"
-                "  --publisher-core <cpu> Pin libe3's publisher thread (outer encode + ZMQ send) to <cpu> (default: -1, no pinning)\n"
-                "  --num-prbs <n>        Expected number of PRBs per symbol (default: 106)\n"
-                "  --lcm-socket <path>   LCM IPC socket path for codelet loading (default: /tmp/jbpf/jbpf_lcm_ipc)\n"
-                "  --codelet-path <dir>  Base directory for codelet binaries (enables auto-loading)\n"
-                "  --encoding <name>     Wire encoding for the E3 channel: 'asn1' (default) or\n"
-                "                          'json'. Must match how libe3 was compiled.\n"
-                "  --link-layer <name>   Link layer: 'zmq' (default) or 'posix'.\n"
-                "  --transport <name>    Transport layer: 'tcp' (default), 'ipc', or 'sctp'.\n"
-                "  --setup-port <p>      E3 channel setup REP port (default: 9990)\n"
-                "  --publisher-port <p>  E3 channel indication PUB port (default: 9991)\n"
-                "  --subscriber-port <p> E3 channel control SUB port    (default: 9999)\n"
-                "  --shm-name <name>     POSIX SHM name for IQ data (default: /e3_ran_buffers)\n"
-                "  --shm-size <bytes>    POSIX SHM size in bytes (default: 1GiB)\n"
-                "  --target-slot <N>     Forward ONLY UL slot N (absolute slot within a frame,\n"
-                "                          0..19 for 30 kHz SCS). Assumes 2 slots/subframe.\n"
-                "                          Default -1 = forward every UL slot.\n"
-                "  --stats-log <path>    Write the per-slot RAN-side stage CSV to <path>\n"
-                "                          (gnb/codelet/dispatch/handler + shm/encode/emit).\n"
-                "                          Default: disabled.\n"
-                "  --help                Show this help\n",
+    std::printf("Usage: %s --config <file.yaml>\n"
+                "\n"
+                "  --config <file>   YAML configuration (required)\n"
+                "  --help            this message\n"
+                "\n"
+                "See configs/e3_controller.yaml for a documented example.\n",
                 prog);
 }
 
-static E3ControllerConfig parse_args(int argc, char** argv)
-{
-    E3ControllerConfig config;
-
-    // Long-only options (no short flag) get codes >= 256 so they don't collide
-    // with single-char optstring values.
-    enum LongOpt {
-        OPT_TRANSPORT = 256,
-        OPT_ENCODING,
-        OPT_LINK_LAYER,
-        OPT_SETUP_PORT,
-        OPT_PUBLISHER_PORT,
-        OPT_SUBSCRIBER_PORT,
-        OPT_SHM_NAME,
-        OPT_SHM_SIZE,
-        OPT_TARGET_SLOT,
-        OPT_STATS_LOG,
-    };
-
-    static struct option long_options[] = {
-        {"ipc-name",        required_argument, nullptr, 'n'},
-        {"run-path",        required_argument, nullptr, 'r'},
-        {"mem-size",        required_argument, nullptr, 'm'},
-        {"poll-interval",   required_argument, nullptr, 'p'},
-        {"poll-core",       required_argument, nullptr, 'C'},
-        {"worker-core",     required_argument, nullptr, 'W'},
-        {"publisher-core",  required_argument, nullptr, 'P'},
-        {"num-prbs",        required_argument, nullptr, 'b'},
-        {"lcm-socket",      required_argument, nullptr, 'l'},
-        {"codelet-path",    required_argument, nullptr, 'c'},
-        {"encoding",        required_argument, nullptr, OPT_ENCODING},
-        {"link-layer",      required_argument, nullptr, OPT_LINK_LAYER},
-        {"transport",       required_argument, nullptr, OPT_TRANSPORT},
-        {"setup-port",      required_argument, nullptr, OPT_SETUP_PORT},
-        {"publisher-port",  required_argument, nullptr, OPT_PUBLISHER_PORT},
-        {"subscriber-port", required_argument, nullptr, OPT_SUBSCRIBER_PORT},
-        {"shm-name",        required_argument, nullptr, OPT_SHM_NAME},
-        {"shm-size",        required_argument, nullptr, OPT_SHM_SIZE},
-        {"target-slot",     required_argument, nullptr, OPT_TARGET_SLOT},
-        {"stats-log",       required_argument, nullptr, OPT_STATS_LOG},
-        {"help",            no_argument,       nullptr, 'h'},
-        {nullptr,           0,                 nullptr,  0 }
-    };
-
-    int opt;
-    while ((opt = getopt_long(argc, argv, "n:r:m:p:C:W:P:b:l:c:h", long_options, nullptr)) != -1) {
-        switch (opt) {
-        case 'n':
-            config.ipc_name = optarg;
-            break;
-        case 'r':
-            config.run_path = optarg;
-            break;
-        case 'm':
-            config.mem_size = std::strtoull(optarg, nullptr, 0);
-            break;
-        case 'p':
-            config.poll_interval_us = std::atoi(optarg);
-            break;
-        case 'C':
-            config.poll_core = std::atoi(optarg);
-            break;
-        case 'W':
-            config.worker_core = std::atoi(optarg);
-            break;
-        case 'P':
-            config.publisher_core = std::atoi(optarg);
-            break;
-        case 'b':
-            config.num_prbs = static_cast<uint16_t>(std::atoi(optarg));
-            break;
-        case 'l':
-            config.lcm_socket_path = optarg;
-            break;
-        case 'c':
-            config.codelet_base_path = optarg;
-            break;
-        case OPT_ENCODING: {
-            std::string v(optarg);
-            if (v == "asn1" || v == "ASN1" || v == "aper" || v == "APER") {
-                config.encoding = libe3::EncodingFormat::ASN1;
-            } else if (v == "json" || v == "JSON") {
-                config.encoding = libe3::EncodingFormat::JSON;
-            } else {
-                std::fprintf(stderr, "[E3Controller] Unknown --encoding value '%s' (expected asn1 or json)\n",
-                             optarg);
-                std::exit(1);
-            }
-            break;
-        }
-        case OPT_LINK_LAYER: {
-            std::string v(optarg);
-            if (v == "zmq" || v == "ZMQ") {
-                config.link_layer = libe3::E3LinkLayer::ZMQ;
-            } else if (v == "posix" || v == "POSIX") {
-                config.link_layer = libe3::E3LinkLayer::POSIX;
-            } else {
-                std::fprintf(stderr, "[E3Controller] Unknown --link-layer value '%s' (expected zmq or posix)\n",
-                             optarg);
-                std::exit(1);
-            }
-            break;
-        }
-        case OPT_TRANSPORT: {
-            std::string v(optarg);
-            if (v == "tcp" || v == "TCP") {
-                config.transport = libe3::E3TransportLayer::TCP;
-            } else if (v == "ipc" || v == "IPC") {
-                config.transport = libe3::E3TransportLayer::IPC;
-            } else if (v == "sctp" || v == "SCTP") {
-                config.transport = libe3::E3TransportLayer::SCTP;
-            } else {
-                std::fprintf(stderr, "[E3Controller] Unknown --transport value '%s' (expected tcp, ipc, or sctp)\n",
-                             optarg);
-                std::exit(1);
-            }
-            break;
-        }
-        case OPT_SETUP_PORT:
-            config.setup_port = static_cast<uint16_t>(std::atoi(optarg));
-            break;
-        case OPT_PUBLISHER_PORT:
-            config.publisher_port = static_cast<uint16_t>(std::atoi(optarg));
-            break;
-        case OPT_SUBSCRIBER_PORT:
-            config.subscriber_port = static_cast<uint16_t>(std::atoi(optarg));
-            break;
-        case OPT_SHM_NAME:
-            config.shm_name = optarg;
-            break;
-        case OPT_SHM_SIZE:
-            config.shm_size = std::strtoull(optarg, nullptr, 0);
-            break;
-        case OPT_TARGET_SLOT:
-            config.target_slot = std::atoi(optarg);
-            break;
-        case OPT_STATS_LOG:
-            config.stats_log_path = optarg;
-            break;
-        case 'h':
-        default:
-            print_usage(argv[0]);
-            std::exit(opt == 'h' ? 0 : 1);
-        }
-    }
-
-    return config;
-}
-
-// ---- Main ----
-
 int main(int argc, char** argv)
 {
-    E3ControllerConfig config = parse_args(argc, argv);
+    // Single argument by design; see print_usage.
+    std::string config_path;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
+            config_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        } else {
+            std::fprintf(stderr, "unexpected argument '%s'\n\n", argv[i]);
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+    if (config_path.empty()) {
+        std::fprintf(stderr, "--config is required\n\n");
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    e3config::ControllerConfig config;
+    std::string cfg_err;
+    if (!e3config::load_config(config_path, config, cfg_err)) {
+        std::fprintf(stderr, "[E3Controller] configuration error: %s\n", cfg_err.c_str());
+        return 1;
+    }
+    e3config::print_config(config);
 
     // E3 agent configuration — single encoding on a single channel.
     std::string ran_id = "ocudu-janus";
 
     libe3::E3Config agentConfig;
     agentConfig.ran_identifier = ran_id;
-    agentConfig.link_layer = config.link_layer;
-    agentConfig.transport_layer = config.transport;
+    agentConfig.link_layer = config.e3.link_layer;
+    agentConfig.transport_layer = config.e3.transport;
     // One encoding, chosen via --encoding. dApps must speak the same encoding
     // and connect to setup/publisher/subscriber ports below.
-    agentConfig.encoding        = config.encoding;
-    agentConfig.setup_port      = config.setup_port;
-    agentConfig.publisher_port  = config.publisher_port;
-    agentConfig.subscriber_port = config.subscriber_port;
+    agentConfig.encoding        = config.e3.encoding;
+    agentConfig.setup_port      = config.e3.setup_port;
+    agentConfig.publisher_port  = config.e3.publisher_port;
+    agentConfig.subscriber_port = config.e3.subscriber_port;
     agentConfig.log_level = 5;  // 0=none, 1=err, 2=warn, 3=info, 4=debug, 5=trace
     // Pin libe3's I/O threads (the RAN outbound loop in particular — it does
     // the outer encode + zmq_send) to a dedicated core if requested. Without
     // this the publisher gets scheduled out under load and it can be
     // scheduled out for hundreds of µs.
-    if (config.publisher_core >= 0) {
-        agentConfig.io_thread_affinity = config.publisher_core;
+    if (config.threads.publisher_core >= 0) {
+        agentConfig.io_thread_affinity = config.threads.publisher_core;
     }
 
     auto encoding_name = [](libe3::EncodingFormat e) {
@@ -416,8 +220,8 @@ int main(int argc, char** argv)
     // side-by-side without colliding on the same file. Derived here so the
     // banner below and the SM registration further down share the value.
     std::string spectrum_stats_log_path;
-    if (!config.stats_log_path.empty()) {
-        const std::string& p = config.stats_log_path;
+    if (!config.logging.stats_log_path.empty()) {
+        const std::string& p = config.logging.stats_log_path;
         auto dot = p.find_last_of('.');
         auto sep = p.find_last_of('/');
         if (dot != std::string::npos && (sep == std::string::npos || dot > sep)) {
@@ -430,14 +234,14 @@ int main(int argc, char** argv)
     std::cout << "=============================================\n";
     std::cout << "E3 Agent Configuration (single-encoding):\n"
               << "  RAN ID:      " << ran_id << "\n"
-              << "  Encoding:    " << encoding_name(config.encoding) << "\n"
-              << "  Link layer:  " << libe3::link_layer_to_string(config.link_layer) << "\n"
-              << "  Transport:   " << libe3::transport_layer_to_string(config.transport) << "\n"
-              << "  Channel:     setup=" << config.setup_port
-              << " publisher=" << config.publisher_port
-              << " subscriber=" << config.subscriber_port << "\n"
+              << "  Encoding:    " << encoding_name(config.e3.encoding) << "\n"
+              << "  Link layer:  " << libe3::link_layer_to_string(config.e3.link_layer) << "\n"
+              << "  Transport:   " << libe3::transport_layer_to_string(config.e3.transport) << "\n"
+              << "  Channel:     setup=" << config.e3.setup_port
+              << " publisher=" << config.e3.publisher_port
+              << " subscriber=" << config.e3.subscriber_port << "\n"
               << "  Stats log:   "
-              << (config.stats_log_path.empty() ? "(disabled)" : config.stats_log_path) << "\n"
+              << (config.logging.stats_log_path.empty() ? "(disabled)" : config.logging.stats_log_path) << "\n"
               << "  Spectrum stats: "
               << (spectrum_stats_log_path.empty() ? "(disabled)" : spectrum_stats_log_path)
               << "\n\n";
@@ -447,21 +251,21 @@ int main(int argc, char** argv)
     std::printf("=============================================\n");
     std::printf("  E3Controller Codelet Configuration\n");
     std::printf("=============================================\n");
-    std::printf("  IPC name:       %s\n", config.ipc_name.c_str());
-    std::printf("  Run path:       %s\n", config.run_path.c_str());
-    std::printf("  Memory size:    %zu bytes\n", config.mem_size);
-    std::printf("  Poll interval:  %d us%s\n", config.poll_interval_us,
-                config.poll_core >= 0 ? " (ignored — busy poll on dedicated core)" : "");
+    std::printf("  IPC name:       %s\n", config.jbpf.ipc_name.c_str());
+    std::printf("  Run path:       %s\n", config.jbpf.run_path.c_str());
+    std::printf("  Memory size:    %zu bytes\n", config.jbpf.mem_size_bytes);
+    std::printf("  Poll interval:  %d us%s\n", config.threads.poll_interval_us,
+                config.threads.poll_core >= 0 ? " (ignored — busy poll on dedicated core)" : "");
     std::printf("  Poll core:      %s\n",
-                config.poll_core >= 0 ? std::to_string(config.poll_core).c_str() : "(none — sleep-based)");
+                config.threads.poll_core >= 0 ? std::to_string(config.threads.poll_core).c_str() : "(none — sleep-based)");
     std::printf("  Worker core:    %s\n",
-                config.worker_core >= 0 ? std::to_string(config.worker_core).c_str() : "(none)");
+                config.threads.worker_core >= 0 ? std::to_string(config.threads.worker_core).c_str() : "(none)");
     std::printf("  Publisher core: %s\n",
-                config.publisher_core >= 0 ? std::to_string(config.publisher_core).c_str() : "(none)");
-    std::printf("  Num PRBs:       %u\n", config.num_prbs);
-    std::printf("  LCM socket:     %s\n", config.lcm_socket_path.c_str());
+                config.threads.publisher_core >= 0 ? std::to_string(config.threads.publisher_core).c_str() : "(none)");
+    std::printf("  Num PRBs:       %u\n", config.radio.nof_prbs);
+    std::printf("  LCM socket:     %s\n", config.jbpf.lcm_socket_path.c_str());
     std::printf("  Codelet path:   %s\n",
-                config.codelet_base_path.empty() ? "(none — auto-loading disabled)" : config.codelet_base_path.c_str());
+                config.jbpf.codelet_base_path.empty() ? "(none — auto-loading disabled)" : config.jbpf.codelet_base_path.c_str());
     std::printf("=============================================\n\n");
 
     // Install signal handlers
@@ -475,18 +279,18 @@ int main(int argc, char** argv)
     struct jbpf_io_config io_config = {};
     io_config.type = JBPF_IO_IPC_PRIMARY;
 
-    std::strncpy(io_config.jbpf_path, config.run_path.c_str(), JBPF_RUN_PATH_LEN - 1);
+    std::strncpy(io_config.jbpf_path, config.jbpf.run_path.c_str(), JBPF_RUN_PATH_LEN - 1);
     io_config.jbpf_path[JBPF_RUN_PATH_LEN - 1] = '\0';
 
     std::strncpy(io_config.jbpf_namespace, JBPF_DEFAULT_NAMESPACE, JBPF_NAMESPACE_LEN - 1);
     io_config.jbpf_namespace[JBPF_NAMESPACE_LEN - 1] = '\0';
 
     std::strncpy(io_config.ipc_config.addr.jbpf_io_ipc_name,
-                 config.ipc_name.c_str(),
+                 config.jbpf.ipc_name.c_str(),
                  JBPF_IO_IPC_MAX_NAMELEN - 1);
     io_config.ipc_config.addr.jbpf_io_ipc_name[JBPF_IO_IPC_MAX_NAMELEN - 1] = '\0';
 
-    io_config.ipc_config.mem_cfg.memory_size = config.mem_size;
+    io_config.ipc_config.mem_cfg.memory_size = config.jbpf.mem_size_bytes;
 
     std::printf("[E3Controller] Initializing jbpf IO (IPC primary)...\n");
     auto* io_ctx = jbpf_io_init(&io_config);
@@ -529,16 +333,16 @@ int main(int argc, char** argv)
     //     by E3SMLayer1 (RF=2). Lazy-started by libe3 on the first dApp
     //     subscription to RF=2.
     e3sm_pipeline::IqPipeline::Config pipeline_cfg;
-    pipeline_cfg.lcm_socket_path    = config.lcm_socket_path;
-    pipeline_cfg.codelet_base_path  = config.codelet_base_path;
-    pipeline_cfg.expected_num_prbu  = config.num_prbs;
-    pipeline_cfg.worker_core        = config.worker_core;
+    pipeline_cfg.lcm_socket_path    = config.jbpf.lcm_socket_path;
+    pipeline_cfg.codelet_base_path  = config.jbpf.codelet_base_path;
+    pipeline_cfg.expected_num_prbu  = config.radio.nof_prbs;
+    pipeline_cfg.worker_core        = config.threads.worker_core;
     e3sm_pipeline::IqPipeline iq_pipeline(dispatcher, io_ctx, std::move(pipeline_cfg));
 
     e3sm_pipeline::SlotIqPipeline::Config slot_pipeline_cfg;
-    slot_pipeline_cfg.lcm_socket_path   = config.lcm_socket_path;
-    slot_pipeline_cfg.codelet_base_path = config.codelet_base_path;
-    slot_pipeline_cfg.worker_core       = config.worker_core;
+    slot_pipeline_cfg.lcm_socket_path   = config.jbpf.lcm_socket_path;
+    slot_pipeline_cfg.codelet_base_path = config.jbpf.codelet_base_path;
+    slot_pipeline_cfg.worker_core       = config.threads.worker_core;
     e3sm_pipeline::SlotIqPipeline slot_iq_pipeline(dispatcher, io_ctx,
                                                    std::move(slot_pipeline_cfg));
 
@@ -555,10 +359,7 @@ int main(int argc, char** argv)
                   << libe3::error_code_to_string(sm_result) << "\n";
         return 1;
     }
-    sm_result = agent.register_sm(std::make_unique<E3SMLayer1>(
-        slot_iq_pipeline, agent,
-        config.shm_name, config.shm_size, config.target_slot,
-        config.stats_log_path));
+    sm_result = agent.register_sm(std::make_unique<E3SMLayer1>(slot_iq_pipeline, agent, config));
     if (sm_result != libe3::ErrorCode::SUCCESS) {
         std::cerr << "Failed to register L1-KPM SM (RF=2): "
                   << libe3::error_code_to_string(sm_result) << "\n";
@@ -598,20 +399,20 @@ int main(int argc, char** argv)
     // libe3 spawns its IO threads inside start() and they inherit the parent's
     // affinity at the time of spawn, so pinning here keeps them on the unpinned
     // set and reserves our core for the jbpf shared-memory drain.
-    bool busy_poll = (config.poll_core >= 0);
+    bool busy_poll = (config.threads.poll_core >= 0);
     if (busy_poll) {
         cpu_set_t mask;
         CPU_ZERO(&mask);
-        CPU_SET(config.poll_core, &mask);
+        CPU_SET(config.threads.poll_core, &mask);
         if (pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask) != 0) {
             std::fprintf(stderr,
                 "[E3Controller] WARNING: failed to pin polling thread to core %d (%s); "
                 "falling back to sleep-based polling\n",
-                config.poll_core, std::strerror(errno));
+                config.threads.poll_core, std::strerror(errno));
             busy_poll = false;
         } else {
             std::printf("[E3Controller] Polling thread pinned to core %d (busy-poll)\n",
-                        config.poll_core);
+                        config.threads.poll_core);
         }
     }
 
@@ -623,8 +424,8 @@ int main(int argc, char** argv)
 #if defined(__x86_64__) || defined(__i386__)
             _mm_pause();  // hyperthread-friendly hint
 #endif
-        } else if (config.poll_interval_us > 0) {
-            usleep(config.poll_interval_us);
+        } else if (config.threads.poll_interval_us > 0) {
+            usleep(config.threads.poll_interval_us);
         }
     }
 
