@@ -43,7 +43,12 @@ struct iq_sample_data {
 
 /* Configuration for PRB-based filtering in the codelet.
  * Sent via control input channel from the E3Controller.
- * Must match the struct in jrtc-apps/codelets/ecpri_iq_samples/ecpri_iq_data.h */
+ *
+ * Must match the struct in codelets/ecpri_iq_samples/ecpri_iq_data.h, which is
+ * the codelet-side definition and therefore the one that fixes the wire layout
+ * of the control-input message. Restated here rather than included because this
+ * header is compiled for the host while that one is compiled for the BPF
+ * target; if they diverge, the codelet misreads the filter config silently. */
 struct prb_filter_config {
     uint16_t expected_num_prbu;  /* 0 = no filtering (pass all), >0 = filter to this PRB count */
 };

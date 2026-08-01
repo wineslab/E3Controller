@@ -41,6 +41,21 @@ add_subdirectory(jbpf)
 unset(add_test)
 unset(set_tests_properties)
 
+# ---- Codelet verifier (offline) ----
+# The gNB does not verify codelets at load time: jbpf's path is
+# ubpf_load_elf_ex + ubpf_compile, and ubpf's JIT emits no memory bounds
+# checks. This binary, run from codelets/Makefile at build time, is therefore
+# the only memory-safety gate these codelets ever pass through.
+#
+# It needs ocudu's janus headers, which define the hook context structs — the
+# verifier derives its ctx descriptors from them with offsetof() so the
+# contract has a single source of truth. Point OCUDU_DIR elsewhere if your
+# checkout is not a sibling of this one.
+set(OCUDU_DIR "${CMAKE_SOURCE_DIR}/../ocudu-e3"
+    CACHE PATH "Path to the ocudu-e3 checkout (hook context contract)")
+set(OCUDU_JANUS_INC "${OCUDU_DIR}/include/ocudu/janus")
+add_subdirectory(codelets/verifier)
+
 # ---- ASN.1 (E3 Service Model) ----
 add_subdirectory(src/e3sm/asn)
 
