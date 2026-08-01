@@ -119,7 +119,8 @@ ShmIqWriter::~ShmIqWriter() {
     close();
 }
 
-bool ShmIqWriter::open(const std::string& shm_name, size_t total_size) {
+bool ShmIqWriter::open(const std::string& shm_name, size_t total_size,
+                       const e3config::RadioGeometry& geom, float cbf16_scale) {
     if (mapped_ != nullptr) {
         std::fprintf(stderr, "[ShmIqWriter] open() called twice\n");
         return false;
@@ -132,25 +133,6 @@ bool ShmIqWriter::open(const std::string& shm_name, size_t total_size) {
     // per slot. Invalid / non-positive values fall back to 1.0 with
     // a warning - 0 or negative would zero the published row and
     // silently break the dApp.
-    if (const char* env = std::getenv("E3_CBF16_SCALE"); env != nullptr) {
-        char*  end   = nullptr;
-        float  parsed = std::strtof(env, &end);
-        if (end != env && std::isfinite(parsed) && parsed > 0.0f) {
-            cbf16_scale_ = parsed;
-            std::printf("[ShmIqWriter] cbf16 → fp16 scale = %g (from E3_CBF16_SCALE)\n",
-                        static_cast<double>(cbf16_scale_));
-        } else {
-            std::fprintf(stderr,
-                "[ShmIqWriter] WARNING: invalid E3_CBF16_SCALE=%s, "
-                "using default %g\n",
-                env, static_cast<double>(cbf16_scale_));
-        }
-    } else {
-        std::printf("[ShmIqWriter] cbf16 → fp16 scale = %g "
-                    "(default; set E3_CBF16_SCALE to tune)\n",
-                    static_cast<double>(cbf16_scale_));
-    }
-
     fd_ = ::shm_open(shm_name.c_str(), O_CREAT | O_RDWR, 0666);
     if (fd_ < 0) {
         std::fprintf(stderr, "[ShmIqWriter] shm_open(%s) failed: %s\n",
@@ -183,9 +165,10 @@ bool ShmIqWriter::open(const std::string& shm_name, size_t total_size) {
     header_ = static_cast<SharedMemoryHeader*>(mapped_);
 
     // Layout sizing.
-    num_fh_samples_ = static_cast<uint32_t>(kShmAntsLayout) * kShmSymbolsPerRow
-                    * kShmScPerSymbol * 2;          // 366912 fp16's per row
-    row_bytes_      = num_fh_samples_ * sizeof(uint16_t);
+    geom_           = geom;
+    cbf16_scale_    = cbf16_scale;
+    num_fh_samples_ = geom_.num_fh_samples();   // whole-row uint16 count
+    row_bytes_      = geom_.row_bytes();
     num_buffers_    = 2;                            // double-buffered ring
 
     size_t usable = (total_size > sizeof(SharedMemoryHeader))
@@ -248,17 +231,27 @@ void ShmIqWriter::publish_row(const int16_t* iq_int16,
     out_buffer_index = next_buf_;
     out_write_index  = next_row_;
 
-    // Antenna-0 region of the target row. The remaining 3 antennas are kept
-    // at zero (set once in open()); the dApp only reads antenna 0.
+    // Antenna-0 region of the target row; the dApp only reads antenna 0 on this
+    // legacy path.
     uint8_t* row_base = buffers_base_
                      + static_cast<size_t>(next_buf_) * fh_buffer_size_
                      + static_cast<size_t>(next_row_) * row_bytes_;
     uint16_t* ant0 = reinterpret_cast<uint16_t*>(row_base);
 
-    const size_t n_pairs = static_cast<size_t>(kShmSymbolsPerRow) * kShmScPerSymbol;
+    const size_t n_pairs = static_cast<size_t>(geom_.nof_symbols) * geom_.nof_subcarriers();
     for (size_t i = 0; i < n_pairs; ++i) {
         ant0[i * 2 + 0] = int16_to_fp16(iq_int16[i * 2 + 0]);
         ant0[i * 2 + 1] = int16_to_fp16(iq_int16[i * 2 + 1]);
+    }
+
+    // Clear the antennas this path never writes. The previous comment claimed
+    // they "are kept at zero (set once in open())" — true only the first time a
+    // row is used. Rows recycle through the ring, so without this the tail holds
+    // IQ from an OLDER slot and the dApp cannot distinguish it from a quiet
+    // antenna. See the same fix in publish_row_cbf16 and in the gNB-side helper.
+    const size_t written = n_pairs * 2u * sizeof(uint16_t);
+    if (written < row_bytes_) {
+        std::memset(row_base + written, 0, row_bytes_ - written);
     }
 
     // Advance the ring. Buffer roll-over only when we wrap past the last row.
@@ -294,12 +287,12 @@ void ShmIqWriter::publish_row_cbf16(const uint8_t* iq_cbf16_bytes,
     // bf16 -> fp16 transformation). This is also the per-antenna fp16 stride
     // within the row (== kShmAntStride): both src ([port][..]) and dst
     // ([ant][..]) advance by n_u16 per antenna, so port p maps to antenna p.
-    const size_t n_u16 = static_cast<size_t>(kShmSymbolsPerRow) * kShmScPerSymbol * 2u;
+    const size_t n_u16 = geom_.u16_per_ant();
 
     // Write every delivered antenna; antennas >= nof_ports stay zero (the row
     // was zero-filled once in open()). Clamp to the row's antenna capacity.
     uint16_t ports = nof_ports ? nof_ports : 1;
-    if (ports > kShmAntsLayout) ports = kShmAntsLayout;
+    if (ports > geom_.nof_ports) ports = geom_.nof_ports;
 
     for (uint16_t a = 0; a < ports; ++a) {
         uint16_t*       dst  = row_u16 + static_cast<size_t>(a) * n_u16;
@@ -321,16 +314,28 @@ void ShmIqWriter::publish_row_cbf16(const uint8_t* iq_cbf16_bytes,
             __m128i ph      = _mm256_cvtps_ph(fscaled, _MM_FROUND_TO_NEAREST_INT);
             _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i), ph);
         }
-        // n_u16 is a multiple of 8 per antenna (273 PRB -> 91728), so the AVX2
-        // loop handles every element; assert it and skip a scalar tail.
-        static_assert((kShmSymbolsPerRow * kShmScPerSymbol * 2) % 8 == 0,
-                      "n_u16 must be a multiple of 8 for the AVX2 path");
-        (void)i;
+        // n_u16 must be a multiple of 8 for the AVX2 loop to cover every
+        // element with no scalar tail (273 PRB x 14 sym x 2 = 91,728 = 8 x
+        // 11,466). Now that the geometry is runtime, this is enforced up front
+        // by e3config::RadioGeometry::validate() rather than by static_assert,
+        // so a configuration that would silently take a scalar remainder is
+        // rejected at startup instead.
+        for (; i < n_u16; ++i) {
+            dst[i] = bf16_to_fp16(srca[i], scale);
+        }
 #else
         for (size_t i = 0; i < n_u16; ++i) {
             dst[i] = bf16_to_fp16(srca[i], scale);
         }
 #endif
+    }
+
+    // Clear antenna slots this slot did not fill — see publish_row for why
+    // "zero-filled once in open()" is not sufficient once rows recycle. Free at
+    // full occupancy (4 ports into a 4-antenna row leaves no tail).
+    const size_t written = static_cast<size_t>(ports) * n_u16 * sizeof(uint16_t);
+    if (written < row_bytes_) {
+        std::memset(row_base + written, 0, row_bytes_ - written);
     }
 
     if (++next_row_ >= num_fh_rows_) {

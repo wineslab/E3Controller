@@ -21,7 +21,7 @@
 #include <fstream>
 
 libe3::ErrorCode E3SMLayer1::init() {
-    if (!shm_writer_.open(shm_name_, shm_size_)) {
+    if (!shm_writer_.open(shm_name_, shm_size_, geom_, cbf16_scale_)) {
         return libe3::ErrorCode::INTERNAL_ERROR;
     }
 
@@ -117,23 +117,42 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     // the absolute slot index within a radio frame (subframe_id*2 +
     // slot_id under 30 kHz SCS). -1 disables.
     if (target_slot_ >= 0) {
-        const int abs_slot =
-            static_cast<int>(s.subframe_id) * 2 + static_cast<int>(s.slot_id);
+        // slot_id is already ocudu's slot_point::slot_index(), i.e. the index
+        // within the 10 ms radio frame (0..slots_per_frame()-1), so use it
+        // directly rather than recomputing from subframe_id with a hardcoded
+        // 2 slots/subframe that only held at 30 kHz SCS.
+        const int abs_slot = static_cast<int>(s.slot_id);
         if (abs_slot != target_slot_) return;
     }
 
-    // Sanity: the blob must carry every antenna port we intend to publish
-    // (nof_ports × kShmSymbolsPerRow × kShmScPerSymbol × 4 bytes/cbf16),
-    // clamped to the SHM row's antenna capacity (kShmAntsLayout). Catches a
-    // grid-shape drift (e.g. ocudu shipping fewer ports than nof_ports claims).
+    // Validate the CONFIGURED geometry against what the RAN actually reports,
+    // once, on the first slot.
+    if (!geometry_checked_) {
+        geometry_checked_ = true;
+        std::string gerr;
+        if (!e3config::validate_against_ran(geom_, s.nof_ports, s.nof_symbols, s.nof_subcarriers, gerr)) {
+            geometry_ok_ = false;
+            std::fprintf(stderr,
+                "[E3SMLayer1] GEOMETRY MISMATCH — refusing to publish.\n"
+                "  configured: %s\n"
+                "  RAN slot:   %u ports x %u sym x %u subc\n"
+                "  %s\n",
+                geom_.describe().c_str(), s.nof_ports, s.nof_symbols, s.nof_subcarriers, gerr.c_str());
+        } else {
+            std::printf("[E3SMLayer1] geometry confirmed against the RAN: %s\n", geom_.describe().c_str());
+        }
+    }
+    if (!geometry_ok_) {
+        return;
+    }
+
+    // Sanity: the blob must carry every antenna port we intend to publish,
+    // clamped to the SHM row's antenna capacity. Catches a grid-shape drift
+    // (e.g. ocudu shipping fewer ports than nof_ports claims).
     const uint16_t ports_clamped =
         (s.nof_ports == 0) ? 1u
-        : (s.nof_ports > e3sm_spectrum::kShmAntsLayout
-               ? static_cast<uint16_t>(e3sm_spectrum::kShmAntsLayout)
-               : s.nof_ports);
-    const uint32_t kPerAntBytes =
-        static_cast<uint32_t>(e3sm_spectrum::kShmSymbolsPerRow) *
-        static_cast<uint32_t>(e3sm_spectrum::kShmScPerSymbol) * 4u;
+        : (s.nof_ports > geom_.nof_ports ? geom_.nof_ports : s.nof_ports);
+    const uint32_t kPerAntBytes = geom_.cbf16_bytes_per_ant();
     const uint32_t kExpectedBytes = static_cast<uint32_t>(ports_clamped) * kPerAntBytes;
     if (s.iq == nullptr || s.iq_size_bytes < kExpectedBytes) {
         std::fprintf(stderr,

@@ -20,20 +20,23 @@
 #include <cstddef>
 #include <string>
 
+#include "e3_config.h"
+
 namespace e3sm_spectrum {
 
-// Layout constants — must match the dApp's compile-time constants in
-// subcarrier_power_app.cpp (N_ANTS, N_SYMBOLS, N_PRBS, N_SC_PER_PRB).
-// Hardcoded to the srsRAN-janus 100 MHz @ 30 kHz SCS config (273 PRBs).
-// If the RAN bandwidth changes, both this constant AND the dApp's N_PRBS
-// must be updated in lockstep so the SHM row stride matches.
-constexpr int kShmAntsLayout    = 4;     // dApp's expected_u16 uses N_ANTS=4
-constexpr int kShmSymbolsPerRow = 14;
-constexpr int kShmPrbsPerSymbol = 273;
-constexpr int kShmScPerPrb      = 12;
-constexpr int kShmScPerSymbol   = kShmPrbsPerSymbol * kShmScPerPrb;  // 3276
-constexpr int kShmAntStride     = kShmSymbolsPerRow * kShmScPerSymbol * 2;
-constexpr int kShmSymStride     = kShmScPerSymbol * 2;
+// The row geometry used to live here as four `constexpr` values with a comment
+// requiring lockstep updates with the dApp's N_PRBS. It is now runtime state,
+// taken from the YAML config at open() (e3config::RadioGeometry) and written
+// into SharedMemoryHeader for consumers to read back.
+//
+// Two reasons the constants had to go:
+//   - changing the antenna count or bandwidth required a recompile, and
+//   - they were already inconsistent with the rest of the controller:
+//     `--num-prbs` was accepted on the command line and fed only the eCPRI PRB
+//     filter, while this file kept sizing rows from `kShmPrbsPerSymbol = 273`.
+//
+// The config is a bootstrap, not the truth — E3SMLayer1 validates it against
+// the geometry the RAN reports in each slot. See e3_config.h.
 
 // Mirrors SharedMemoryHeader in
 // spear-aerial-sample-apps/dapps/common/e3_manager/e3_manager.h:39.
@@ -61,7 +64,13 @@ public:
 
     // shm_open + ftruncate + mmap + write header. Returns false on failure
     // (with errno set + a message on stderr).
-    bool open(const std::string& shm_name, size_t total_size);
+    //
+    // `geom` fixes the row stride and antenna capacity; `cbf16_scale` is the
+    // bf16 -> fp16 factor, previously read from the E3_CBF16_SCALE env var and
+    // now part of the config because the gNB-side publish helper needs the same
+    // value and a disagreement would be silently wrong data.
+    bool open(const std::string& shm_name, size_t total_size,
+              const e3config::RadioGeometry& geom, float cbf16_scale);
 
     void close();
 
@@ -77,7 +86,10 @@ public:
     // codelet-produced cbf16_t blob (bf16 real + bf16 imag, 4 bytes per
     // complex sample) laid out as [port][sym][sc][I,Q] - matches ocudu's
     // resource_grid_reader_impl tensor layout. Writes nof_ports antennas
-    // (clamped to kShmAntsLayout); antennas beyond nof_ports stay zero.
+    // (clamped to the configured antenna capacity); antennas beyond nof_ports
+    // are zeroed on every publish -- NOT merely left alone. Rows recycle through
+    // the ring, so a slot with fewer ports than the row holds would otherwise
+    // expose IQ from an OLDER slot as if it were a quiet antenna.
     // Converts bf16 → IEEE half (fp16) on the fly so the dApp's reader
     // sees the same wire shape it expects from the legacy int16 path.
     // Returns the (fh_buffer_index, fh_write_index) like publish_row.
@@ -89,6 +101,11 @@ public:
     uint32_t num_fh_rows()   const { return num_fh_rows_; }
     uint32_t num_buffers()   const { return num_buffers_; }
     uint32_t num_fh_samples() const { return num_fh_samples_; }
+    uint32_t row_bytes()      const { return row_bytes_; }
+
+    // Geometry this writer was opened with. E3SMLayer1 uses it instead of the
+    // old compile-time constants when sizing its expectations.
+    const e3config::RadioGeometry& geometry() const { return geom_; }
 
     // Scale factor applied to bf16 values in publish_row_cbf16 before
     // they are converted to fp16. ocudu's resource grid stores cbf16
@@ -97,8 +114,8 @@ public:
     // scale (65504). Tuning this knob shifts the on-wire fp16
     // magnitudes up/down by a constant linear factor so the dApp's
     // dBFS readouts land in the displayable [-110, -10] range. Tuned
-    // by env var E3_CBF16_SCALE (read at open() time). Default 1.0
-    // means "pass through unchanged".
+    // Supplied by the config (shm.cbf16_scale). Default 1.0 means
+    // "pass through unchanged".
     float cbf16_scale() const { return cbf16_scale_; }
 
 private:
@@ -120,9 +137,11 @@ private:
     uint32_t next_row_ = 0;
     uint8_t  next_buf_ = 0;
 
-    // See cbf16_scale() above for semantics. Set in open() from
-    // E3_CBF16_SCALE env var (default 1.0).
+    // See cbf16_scale() above for semantics. Set in open() from the config.
     float cbf16_scale_ = 1.0f;
+
+    // Row geometry (antenna count, symbols, subcarriers) from the config.
+    e3config::RadioGeometry geom_{};
 };
 
 }  // namespace e3sm_spectrum

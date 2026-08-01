@@ -38,16 +38,15 @@ public:
 
     E3SMLayer1(e3sm_pipeline::SlotIqPipeline& pipeline,
                libe3::E3Agent& agent,
-               std::string shm_name = "/e3_ran_buffers",
-               std::size_t shm_size = static_cast<std::size_t>(1) << 30,
-               int target_slot = -1,
-               std::string stats_log_path = "")
+               const e3config::ControllerConfig& cfg)
         : pipeline_(pipeline),
           agent_(&agent),
-          shm_name_(std::move(shm_name)),
-          shm_size_(shm_size),
-          target_slot_(target_slot),
-          stats_log_path_(std::move(stats_log_path))
+          shm_name_(cfg.shm.name),
+          shm_size_(cfg.shm.size_bytes),
+          target_slot_(cfg.target_slot),
+          stats_log_path_(cfg.logging.stats_log_path),
+          geom_(cfg.radio),
+          cbf16_scale_(cfg.shm.cbf16_scale)
     {}
 
     std::string name() const override { return "L1 KPM Service Model"; }
@@ -80,14 +79,27 @@ private:
 
     std::string shm_name_;
     std::size_t shm_size_;
-    /* Optional single-slot filter; absolute slot within a 10 ms frame
-     * (subframe_id*2 + slot_id at 30 kHz SCS). -1 disables. */
+    /* Optional single-slot filter; slot index within a 10 ms frame, i.e. the
+     * value ocudu's slot_point::slot_index() returns (0..19 at 30 kHz SCS).
+     * -1 disables. Superseded by workstream F's codelet-side slot_mask, which
+     * makes the same decision before any data moves. */
     int         target_slot_;
     /* Path for the per-slot stage CSV. Empty disables stats logging. */
     std::string stats_log_path_;
 
     e3sm_spectrum::ShmIqWriter shm_writer_;
     bool                       running_{false};
+
+    /* Row geometry from the YAML config; replaces the old constexpr in
+     * e3sm_shm_writer.h. Treated as a bootstrap and checked against the RAN on
+     * the first slot -- see the validate_against_ran() call in on_sample. */
+    e3config::RadioGeometry geom_;
+    float                   cbf16_scale_{1.0f};
+
+    /* One-shot geometry check. geometry_ok_ latches false on mismatch so we
+     * refuse to publish rather than emit rows the dApp would misread. */
+    bool geometry_checked_{false};
+    bool geometry_ok_{true};
 
     /* Per-slot stats. slot_publish_seq_ increments for every slot
      * we publish; counts indications emitted to dApps. stats_log_ is
