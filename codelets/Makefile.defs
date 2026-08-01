@@ -1,0 +1,155 @@
+# codelets/Makefile.defs — toolchain and include paths for E3Controller codelets.
+#
+# Self-contained: NO dependency on jrtc-apps. Previously these rules lived in
+# jrtc-apps/codelets/, most of which was protobuf/jrtc machinery (PROTO_AND_SCHEMA,
+# jbpf_protobuf_cli serde, ctypesgen, USE_JRTC) that this project never used —
+# our codelets publish through jbpf output maps and the controller's own
+# ASN.1/JSON encoders. What remains is the ten lines we actually need.
+#
+# Overridable on the command line, e.g.:
+#   make OCUDU_DIR=/src/ocudu-e3
+
+# `all` must stay the default goal. This file is included FIRST by every codelet
+# Makefile, so without this the first target defined below (show-config) would
+# become the default and a bare `make` would print diagnostics instead of
+# building.
+.DEFAULT_GOAL := all
+
+CODELETS_DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+E3_ROOT      := $(patsubst %/,%,$(dir $(CODELETS_DIR)))
+
+# ---- jbpf (the E3Controller submodule; built by build.sh into $(E3_ROOT)/out) ----
+JBPF_DIR     ?= $(E3_ROOT)/jbpf
+JBPF_OUT_DIR ?= $(E3_ROOT)/out
+
+# ---- ocudu: source of truth for the hook context contract ----
+# The ctx structs are defined by the hook PRODUCER, so ocudu owns them. We put
+# its headers on the include path rather than keeping a copy here. Three
+# byte-identical copies of jbpf_srsran_contexts.h used to float around the
+# workspace with nothing enforcing agreement; a field added on the RAN side
+# would silently shift every offset the codelet reads through.
+OCUDU_DIR       ?= $(E3_ROOT)/../ocudu-e3
+OCUDU_JANUS_INC ?= $(OCUDU_DIR)/include/ocudu/janus
+OCUDU_SPECS_INC ?= $(OCUDU_DIR)/ocudu_janus/verifier/specs
+
+# Local import target for environments without an ocudu checkout (e.g. a build
+# container). `make import-contract` populates it; `make check-contract` fails
+# on drift. OCUDU_JANUS_INC comes first on the include path so the live tree
+# always wins when it is present.
+CONTRACT_INC := $(CODELETS_DIR)/include
+
+# ---- offline verifier (built by cmake from codelets/verifier/) ----
+E3_VERIFIER ?= $(JBPF_OUT_DIR)/bin/e3_verifier_cli
+
+# Absolutise every path that can be overridden. The top-level Makefile recurses
+# with `$(MAKE) -C <codelet dir>`, so a relative override like
+# `make OCUDU_DIR=../ocudu-e3` would otherwise be re-resolved against each
+# subdirectory's CWD and silently fail to find the contract.
+override JBPF_DIR       := $(abspath $(JBPF_DIR))
+override JBPF_OUT_DIR   := $(abspath $(JBPF_OUT_DIR))
+override OCUDU_DIR      := $(abspath $(OCUDU_DIR))
+override OCUDU_JANUS_INC := $(abspath $(OCUDU_JANUS_INC))
+override OCUDU_SPECS_INC := $(abspath $(OCUDU_SPECS_INC))
+override E3_VERIFIER    := $(abspath $(E3_VERIFIER))
+
+# Pass them down explicitly so sub-makes get the resolved absolute values.
+export JBPF_DIR JBPF_OUT_DIR OCUDU_DIR OCUDU_JANUS_INC OCUDU_SPECS_INC E3_VERIFIER
+
+# ---- toolchain ----
+#
+# Codelets are eBPF objects, so the compiler MUST be clang: `-target bpf` is a
+# clang flag and GCC rejects it outright ("unrecognized command-line option").
+#
+# Note `CC ?= clang` does NOT work here. GNU make pre-defines CC = cc, and `?=`
+# only assigns when $(origin CC) is `undefined` — a built-in default has origin
+# `default`, so `?=` is a no-op and the build silently uses cc. That is fine
+# wherever cc happens to be clang (macOS) and fails everywhere else.
+#
+# Testing $(origin CC) explicitly overrides only make's built-in, while still
+# honouring `make CC=...` (origin `command line`) and an exported CC (origin
+# `environment`).
+ifeq ($(origin CC),default)
+CC := clang
+endif
+
+INC := -I$(JBPF_OUT_DIR)/inc \
+       -I$(JBPF_DIR)/src/core \
+       -I$(JBPF_DIR)/src/common \
+       -I$(OCUDU_JANUS_INC) \
+       -I$(OCUDU_SPECS_INC) \
+       -I$(CONTRACT_INC)
+
+# -target bpf: codelets are eBPF objects, loaded by ubpf in the gNB.
+#
+# -D__x86_64__ / -DJBPF_DEBUG_ENABLED / -DJBPF_EXPERIMENTAL_FEATURES are carried
+# over from the SDK flags deliberately: the goal is a rebuilt .o that behaves
+# identically to the one currently deployed, so this is not the change to
+# combine with a flag cleanup. Dropped from the SDK set: -DFMT_USE_BITINT=0 and
+# -Wno-reorder-init-list, which existed for the SDK's C++ codelets pulling in
+# fmt — ours are plain C.
+CFLAGS ?= -O2 -target bpf -Wall \
+          -D__x86_64__ \
+          -DJBPF_EXPERIMENTAL_FEATURES \
+          -DJBPF_DEBUG_ENABLED
+
+C_SOURCES := $(wildcard *.c)
+C_OBJECTS := $(C_SOURCES:.c=.o)
+
+# ---- diagnostics ----
+#
+# Every include root is derived from E3_ROOT, so one wrong assumption about the
+# layout shows up as a bare "'jbpf_defs.h' file not found" with no hint about
+# which root was wrong. These targets make the resolution visible and check it
+# before invoking the compiler.
+
+.PHONY: show-config check-env
+
+show-config:
+	@echo "CODELETS_DIR     = $(CODELETS_DIR)"
+	@echo "E3_ROOT          = $(E3_ROOT)"
+	@echo "CC               = $(CC)   [origin: $(origin CC)]"
+	@echo "JBPF_DIR         = $(JBPF_DIR)"
+	@echo "JBPF_OUT_DIR     = $(JBPF_OUT_DIR)"
+	@echo "OCUDU_DIR        = $(OCUDU_DIR)"
+	@echo "OCUDU_JANUS_INC  = $(OCUDU_JANUS_INC)"
+	@echo "CONTRACT_INC     = $(CONTRACT_INC)"
+	@echo "E3_VERIFIER      = $(E3_VERIFIER)"
+	@echo
+	@echo "include roots:"
+	@for d in $(patsubst -I%,%,$(INC)); do \
+		if [ -d "$$d" ]; then echo "  [ok]      $$d"; else echo "  [MISSING] $$d"; fi; \
+	done
+	@echo
+	@echo "key headers:"
+	@for h in $(JBPF_DIR)/src/common/jbpf_defs.h \
+	          $(JBPF_DIR)/src/core/jbpf_helper.h \
+	          $(OCUDU_JANUS_INC)/jbpf_srsran_contexts.h \
+	          $(CONTRACT_INC)/jbpf_srsran_contexts.h; do \
+		if [ -f "$$h" ]; then echo "  [ok]      $$h"; else echo "  [missing] $$h"; fi; \
+	done
+
+# Hard-fail on the two roots that are not optional, naming them.
+check-env:
+	@if [ ! -f "$(JBPF_DIR)/src/common/jbpf_defs.h" ]; then \
+		echo "ERROR: jbpf sources not found at JBPF_DIR=$(JBPF_DIR)" >&2; \
+		echo "       Expected $(JBPF_DIR)/src/common/jbpf_defs.h" >&2; \
+		if [ -d "$(JBPF_DIR)" ] && [ -z "$$(ls -A $(JBPF_DIR) 2>/dev/null)" ]; then \
+			echo "       That directory is EMPTY — the submodule is not checked out:" >&2; \
+			echo "         git -C $(E3_ROOT) submodule update --init --recursive" >&2; \
+		else \
+			echo "       Override it:  make JBPF_DIR=/path/to/jbpf" >&2; \
+		fi; \
+		echo "       Run 'make show-config' to see every resolved path." >&2; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(OCUDU_JANUS_INC)/jbpf_srsran_contexts.h" ] && \
+	    [ ! -f "$(CONTRACT_INC)/jbpf_srsran_contexts.h" ]; then \
+		echo "ERROR: hook context contract not found." >&2; \
+		echo "       Tried $(OCUDU_JANUS_INC)/jbpf_srsran_contexts.h" >&2; \
+		echo "         and $(CONTRACT_INC)/jbpf_srsran_contexts.h" >&2; \
+		echo "       Pass OCUDU_DIR=/path/to/ocudu-e3, or 'make import-contract'." >&2; \
+		exit 1; \
+	fi
+
+# Subdirectories holding a codelet (used by the top-level codelets/Makefile).
+CODELET_DIRS := $(patsubst %/Makefile,%,$(wildcard */Makefile))

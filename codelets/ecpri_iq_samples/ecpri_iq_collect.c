@@ -15,9 +15,9 @@
 
 #include "jbpf_defs.h"
 #include "jbpf_helper.h"
-#include "../utils/misc_utils.h"
-#include "../utils/net_utils.h"
-#include "../xran_packets/xran_format.h"
+#include "misc_utils.h"
+#include "net_utils.h"
+#include "xran_format.h"
 #include "jbpf_srsran_contexts.h"
 #include "ecpri_iq_data.h"
 

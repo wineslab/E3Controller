@@ -1,0 +1,66 @@
+# codelets/Makefile.common — build + verify rules for one codelet directory.
+#
+# Included by each codelet's Makefile after Makefile.defs.
+
+.PHONY: all verify clean cleanall check-cc check-verifier
+
+all: check-cc check-env check-verifier $(C_OBJECTS)
+
+# Fail with an explanation rather than GCC's bare
+# "unrecognized command-line option '-target'".
+check-cc:
+	@$(CC) -target bpf --version >/dev/null 2>&1 || { \
+		echo "ERROR: '$(CC)' cannot target eBPF." >&2; \
+		echo "       Codelets need clang; GCC rejects -target." >&2; \
+		echo "       Install clang, or point CC at it:  make CC=clang-14" >&2; \
+		exit 1; \
+	}
+
+# Compile, then VERIFY — and let verification failure fail the build.
+#
+# The rule this replaces (jrtc-apps/codelets/Makefile.common) read:
+#
+#     - $(VERIFIER_BIN) $@ || echo "$<: Failed verification"
+#
+# which swallowed failure twice over: the leading `-` tells make to ignore the
+# exit status, and `|| echo` masks it again. That is the mechanism by which
+# these codelets have never actually had to verify. Since the gNB does no
+# verification at load time (ubpf only — see codelets/verifier/e3_verifier_cli.cpp
+# for the details), this build step is the only safety gate that ever runs on
+# them, so it has to be able to fail.
+#
+# No section argument: each object holds a single program, and the verifier
+# resolves the program type from the ELF section prefix.
+# Build via a temporary and only move into place once verification passes.
+# Two reasons this matters:
+#   1. The .o files are TRACKED and are what gets deployed to the pod, so a
+#      failed compile must not destroy the last good one. clang removes its
+#      output file on error, which is exactly what happens otherwise.
+#   2. It makes it impossible for an unverified object to replace a verified
+#      one, even transiently.
+$(C_OBJECTS): %.o: %.c
+	@echo "--- compiling $< ---"
+	$(CC) $(CFLAGS) $(INC) -c $< -o $@.tmp
+	@echo "--- verifying $< ---"
+	@$(E3_VERIFIER) $@.tmp || { rm -f $@.tmp; echo "NOT replacing $@ — previous object left in place" >&2; exit 1; }
+	@mv $@.tmp $@
+
+# Checked here rather than as a prerequisite of the objects: a file target with
+# a recipe is force-remade by `make -B`, which made a perfectly good verifier
+# look missing.
+check-verifier:
+	@if [ ! -x "$(E3_VERIFIER)" ]; then \
+		echo "ERROR: verifier not found (or not executable) at $(E3_VERIFIER)" >&2; \
+		echo "       Build it first:  cd $(E3_ROOT) && ./build.sh" >&2; \
+		echo "       (or pass E3_VERIFIER=/path/to/e3_verifier_cli)" >&2; \
+		exit 1; \
+	fi
+
+# Verify already-built objects without recompiling.
+verify: check-verifier $(C_OBJECTS)
+	@for o in $(C_OBJECTS); do $(E3_VERIFIER) $$o || exit 1; done
+
+clean:
+	rm -f *.o.tmp
+
+cleanall: clean
