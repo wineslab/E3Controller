@@ -70,6 +70,27 @@ FetchContent_Declare(
 set(EXPECTED_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(tl_expected)
 
+# ---- yaml-cpp (E3Controller configuration) ----
+# The controller is configured by a single YAML file rather than 20 CLI options.
+# YAML specifically (not JSON, which would be free via libe3's nlohmann) because
+# ocudu's own configuration is YAML, including the `jbpf:` section this file must
+# agree with — keeping both sides in the same language makes them diffable and
+# reviewable together, which is the point when the invariant is "these must match".
+#
+# FetchContent rather than a system package, matching the tl::expected pattern
+# above, so the build stays self-contained.
+FetchContent_Declare(
+  yaml_cpp
+  GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+  GIT_TAG 0.8.0
+  GIT_SHALLOW TRUE
+)
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(yaml_cpp)
+
 # ---- libe3 (E3 agent library) ----
 # libe3 is the `libe3/` git submodule (https://github.com/wineslab/libe3.git,
 # pinned to tag 0.0.4). build.sh builds it with BOTH encoders and installs it to
@@ -94,6 +115,8 @@ add_executable(e3_controller
   # shared data plane
   src/e3sm/iq_pipeline.cpp
   src/e3sm/slot_iq_pipeline.cpp
+  # configuration (YAML)
+  src/e3_config.cpp
   # writers + decompression
   src/e3sm/utils/e3sm_shm_writer.cpp
   src/e3sm/utils/bfp_decompress.cpp
@@ -117,6 +140,7 @@ target_link_libraries(e3_controller PRIVATE
   jbpf::lcm_ipc_lib
   e3sm_asn
   libe3::libe3
+  yaml-cpp
   pthread
   rt
   dl

@@ -97,7 +97,28 @@ parse_transport(const std::string& s, libe3::E3TransportLayer& out, std::string&
     return false;
 }
 
+bool
+parse_writer(const std::string& s, ShmWriter& out, std::string& err)
+{
+    if (s == "controller") {
+        out = ShmWriter::Controller;
+        return true;
+    }
+    if (s == "gnb") {
+        out = ShmWriter::Gnb;
+        return true;
+    }
+    err = "shm.writer must be 'controller' or 'gnb', got '" + s + "'";
+    return false;
+}
+
 } // namespace
+
+const char*
+to_string(ShmWriter w)
+{
+    return w == ShmWriter::Gnb ? "gnb" : "controller";
+}
 
 std::string
 RadioGeometry::describe() const
@@ -187,12 +208,15 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
 
         /* ---- shm ---- */
         if (const auto n = root["shm"]) {
-            if (!check_keys(n, "shm", {"name", "size_bytes", "cbf16_scale"}, err)) {
+            if (!check_keys(n, "shm", {"name", "size_bytes", "cbf16_scale", "writer"}, err)) {
                 return false;
             }
             get(n, "name", out.shm.name);
             get(n, "size_bytes", out.shm.size_bytes);
             get(n, "cbf16_scale", out.shm.cbf16_scale);
+            if (n["writer"] && !parse_writer(n["writer"].as<std::string>(), out.shm.writer, err)) {
+                return false;
+            }
         }
 
         /* ---- jbpf ---- */
@@ -299,6 +323,10 @@ print_config(const ControllerConfig& cfg)
                 cfg.radio.row_bytes(), cfg.radio.slots_per_frame());
     std::printf("  shm:        %s, %zu bytes, cbf16_scale=%g\n", cfg.shm.name.c_str(), cfg.shm.size_bytes,
                 static_cast<double>(cfg.shm.cbf16_scale));
+    std::printf("  row writer: %s%s\n", to_string(cfg.shm.writer),
+                cfg.shm.writer == ShmWriter::Gnb
+                    ? "  (gNB helper converts + writes; controller owns the region only)"
+                    : "  (controller converts + writes)");
     std::printf("  jbpf:       ipc=%s run=%s lcm=%s\n", cfg.jbpf.ipc_name.c_str(), cfg.jbpf.run_path.c_str(),
                 cfg.jbpf.lcm_socket_path.c_str());
     std::printf("  codelets:   %s\n",

@@ -67,9 +67,22 @@ struct SlotSample {
     uint16_t nof_subcarriers{0};
 
     /* Pointer into the worker's backing buffer. Valid for the callback
-     * duration only. cbf16_t = 4 bytes per complex sample. */
+     * duration only. cbf16_t = 4 bytes per complex sample.
+     *
+     * NULL in `writer: gnb` mode: there the gNB-side helper has already
+     * converted the slot straight into /e3_ran_buffers, so no IQ crosses the
+     * jbpf ring and the descriptor below says where the row landed. */
     const uint8_t* iq{nullptr};
     uint32_t       iq_size_bytes{0};
+
+    /* Row the gNB-side helper wrote, in `writer: gnb` mode -- the
+     * (fh_buffer_index, fh_write_index) pair the Indication carries.
+     *
+     * Meaningless in `writer: controller` mode, where the controller writes the
+     * row itself and derives these from its own ring cursor. Exactly one writer
+     * may own that cursor, which is what e3config::ShmWriter enforces. */
+    uint8_t  fh_buffer_index{0};
+    uint32_t fh_write_index{0};
 
     /* RAN anchor (CLOCK_REALTIME ns) stamped by the ocudu hook caller
      * at hand-off. Same domain as jbpf_time_get_ns() and the dApp's

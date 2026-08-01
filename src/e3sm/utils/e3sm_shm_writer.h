@@ -70,7 +70,17 @@ public:
     // now part of the config because the gNB-side publish helper needs the same
     // value and a disagreement would be silently wrong data.
     bool open(const std::string& shm_name, size_t total_size,
-              const e3config::RadioGeometry& geom, float cbf16_scale);
+              const e3config::RadioGeometry& geom, float cbf16_scale,
+              e3config::ShmWriter writer = e3config::ShmWriter::Controller);
+
+    // True when this process is the one converting and writing rows. False in
+    // `writer: gnb` mode, where the controller owns the region but the gNB-side
+    // helper writes it.
+    //
+    // The publish_row* methods HARD-REFUSE when this is false. Both writers keep
+    // their own ring cursor, so two active writers would silently overwrite each
+    // other's rows -- making that impossible is the whole point of the switch.
+    bool writes_rows() const { return writer_ == e3config::ShmWriter::Controller; }
 
     void close();
 
@@ -78,7 +88,8 @@ public:
     // the next ring slot. iq_int16 is laid out as [sym][sc][I,Q] (3276*2*14
     // int16 values). Returns the (fh_buffer_index, fh_write_index) that the
     // dApp will use to address the row.
-    void publish_row(const int16_t* iq_int16,
+    // Returns false (writing nothing) when writes_rows() is false.
+    bool publish_row(const int16_t* iq_int16,
                      uint8_t& out_buffer_index,
                      uint32_t& out_write_index);
 
@@ -93,7 +104,8 @@ public:
     // Converts bf16 → IEEE half (fp16) on the fly so the dApp's reader
     // sees the same wire shape it expects from the legacy int16 path.
     // Returns the (fh_buffer_index, fh_write_index) like publish_row.
-    void publish_row_cbf16(const uint8_t* iq_cbf16_bytes,
+    // Returns false (writing nothing) when writes_rows() is false.
+    bool publish_row_cbf16(const uint8_t* iq_cbf16_bytes,
                            uint16_t nof_ports,
                            uint8_t& out_buffer_index,
                            uint32_t& out_write_index);
@@ -142,6 +154,9 @@ private:
 
     // Row geometry (antenna count, symbols, subcarriers) from the config.
     e3config::RadioGeometry geom_{};
+
+    // Who writes rows. See writes_rows().
+    e3config::ShmWriter writer_ = e3config::ShmWriter::Controller;
 };
 
 }  // namespace e3sm_spectrum

@@ -46,7 +46,8 @@ public:
           target_slot_(cfg.target_slot),
           stats_log_path_(cfg.logging.stats_log_path),
           geom_(cfg.radio),
-          cbf16_scale_(cfg.shm.cbf16_scale)
+          cbf16_scale_(cfg.shm.cbf16_scale),
+          writer_mode_(cfg.shm.writer)
     {}
 
     std::string name() const override { return "L1 KPM Service Model"; }
@@ -95,6 +96,10 @@ private:
      * the first slot -- see the validate_against_ran() call in on_sample. */
     e3config::RadioGeometry geom_;
     float                   cbf16_scale_{1.0f};
+
+    /* Who converts and writes the fp16 rows. Exactly one process may; see
+     * e3config::ShmWriter. */
+    e3config::ShmWriter writer_mode_{e3config::ShmWriter::Controller};
 
     /* One-shot geometry check. geometry_ok_ latches false on mismatch so we
      * refuse to publish rather than emit rows the dApp would misread. */

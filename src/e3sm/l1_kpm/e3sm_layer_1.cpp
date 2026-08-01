@@ -21,7 +21,7 @@
 #include <fstream>
 
 libe3::ErrorCode E3SMLayer1::init() {
-    if (!shm_writer_.open(shm_name_, shm_size_, geom_, cbf16_scale_)) {
+    if (!shm_writer_.open(shm_name_, shm_size_, geom_, cbf16_scale_, writer_mode_)) {
         return libe3::ErrorCode::INTERNAL_ERROR;
     }
 
@@ -184,12 +184,23 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
         return;  // No one is listening; nothing to publish.
     }
 
-    // Publish the slot to /e3_ran_buffers. publish_row_cbf16 does the
-    // bf16 → fp16 conversion inline (the dApp expects fp16 on wire).
+    // Publish the slot to /e3_ran_buffers.
+    //
+    // In `writer: controller` mode this converts cbf16 -> fp16 inline (the dApp
+    // expects fp16 on the wire). In `writer: gnb` mode the gNB-side helper has
+    // already written the row in the PHY RX thread and reported which one, so we
+    // must NOT write here: both writers keep their own ring cursor and two active
+    // writers would silently overwrite each other. publish_row_cbf16 hard-refuses
+    // in that mode; we take the indices the RAN reported instead.
     const auto t_shm_start = clock::now();
     uint8_t  fh_buf_idx   = 0;
     uint32_t fh_write_idx = 0;
-    shm_writer_.publish_row_cbf16(s.iq, ports_clamped, fh_buf_idx, fh_write_idx);
+    if (shm_writer_.writes_rows()) {
+        shm_writer_.publish_row_cbf16(s.iq, ports_clamped, fh_buf_idx, fh_write_idx);
+    } else {
+        fh_buf_idx   = s.fh_buffer_index;
+        fh_write_idx = s.fh_write_index;
+    }
     const auto t_shm_end = clock::now();
 
     // Absolute slot within a 10 ms frame (0..19 at 30 kHz SCS).

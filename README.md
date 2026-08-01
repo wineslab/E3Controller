@@ -127,6 +127,7 @@ shm:
   name:        /e3_ran_buffers
   size_bytes:  1073741824      # 1 GiB
   cbf16_scale: 1.0             # bf16 -> fp16 scale; must be > 0
+  writer:      controller      # controller | gnb  (exactly one may write)
 
 # must agree with the gNB's own `jbpf:` section
 jbpf:
@@ -186,12 +187,31 @@ radio:
 | Section | Keys | Notes |
 |---|---|---|
 | `radio` | `nof_ports`, `nof_prbs`, `nof_symbols`, `scs_khz` | **Must match the running gNB.** Validated against the RAN — see below. |
-| `shm` | `name`, `size_bytes`, `cbf16_scale` | The `/e3_ran_buffers` region the controller owns and the dApp reads |
+| `shm` | `name`, `size_bytes`, `cbf16_scale`, `writer` | The `/e3_ran_buffers` region the controller owns and the dApp reads; `writer` picks which process converts and writes rows (see below) |
 | `jbpf` | `ipc_name`, `run_path`, `mem_size_bytes`, `lcm_socket_path`, `codelet_base_path` | Must agree with the gNB's own `jbpf:` YAML section |
 | `e3` | `encoding`, `link_layer`, `transport`, `setup_port`, `publisher_port`, `subscriber_port` | `encoding` is `asn1` or `json`; JSON/cuBB dApps expect ports 5555/5556/5557 |
 | `threads` | `poll_core`, `worker_core`, `publisher_core`, `poll_interval_us` | `-1` = no pinning (the poll thread then sleeps rather than busy-spinning) |
 | `logging` | `stats_log_path` | Empty disables the per-slot stage CSV |
 | *(top level)* | `target_slot` | Forward only this slot index within a 10 ms frame; `-1` forwards every UL slot |
+
+#### Who writes the rows (`shm.writer`)
+
+| Value | Data path | Requires |
+|---|---|---|
+| `controller` (default) | codelet copies the grid into the jbpf ring -> the controller converts cbf16 -> fp16 into `/e3_ran_buffers` | any gNB |
+| `gnb` | codelet calls the gNB-side publish helper, which converts and writes the row in the PHY RX thread; the jbpf ring carries only a ~64 B descriptor | a gNB with the E3 helpers registered and the descriptor-emitting codelet |
+
+`gnb` halves total memory traffic (3 MB -> 1.5 MB per slot) by fusing the copy and
+the conversion into one pass, and takes the controller out of the data plane entirely.
+
+**Exactly one process may write.** Both writers keep their own ring cursor, so if both
+were active they would overwrite each other's rows with no error anywhere. The switch makes
+that structurally impossible: in `gnb` mode the controller's `publish_row_cbf16`
+hard-refuses and the row indices come from the RAN instead.
+
+Either way the controller **owns** the region — it creates, sizes, zero-fills, headers and
+tears it down; the helper only attaches (`O_RDWR` without `O_CREAT`, so it cannot race the
+owner into creating one with the wrong shape).
 
 #### Radio geometry is checked, not trusted
 

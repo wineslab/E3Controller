@@ -120,19 +120,20 @@ ShmIqWriter::~ShmIqWriter() {
 }
 
 bool ShmIqWriter::open(const std::string& shm_name, size_t total_size,
-                       const e3config::RadioGeometry& geom, float cbf16_scale) {
+                       const e3config::RadioGeometry& geom, float cbf16_scale,
+                       e3config::ShmWriter writer) {
     if (mapped_ != nullptr) {
         std::fprintf(stderr, "[ShmIqWriter] open() called twice\n");
         return false;
     }
     shm_name_ = shm_name;
 
-    // Pick up the cbf16→fp16 scale factor from the env. We parse here
-    // rather than in publish_row_cbf16 so the strtof cost (and the
-    // "no env var → default" message) happens once at startup, not
-    // per slot. Invalid / non-positive values fall back to 1.0 with
-    // a warning - 0 or negative would zero the published row and
-    // silently break the dApp.
+    // The cbf16->fp16 scale and the row geometry now come from the config
+    // (assigned below), not from an E3_CBF16_SCALE env var. They are part of a
+    // cross-process contract: the same values are pushed to the gNB-side publish
+    // helper via e3_shm_cfg, and a disagreement would produce different rows
+    // with no error -- bf16 and fp16 are both 2 bytes, so a wrong scale is
+    // silently wrong data. The loader rejects a non-positive scale.
     fd_ = ::shm_open(shm_name.c_str(), O_CREAT | O_RDWR, 0666);
     if (fd_ < 0) {
         std::fprintf(stderr, "[ShmIqWriter] shm_open(%s) failed: %s\n",
@@ -167,6 +168,7 @@ bool ShmIqWriter::open(const std::string& shm_name, size_t total_size,
     // Layout sizing.
     geom_           = geom;
     cbf16_scale_    = cbf16_scale;
+    writer_         = writer;
     num_fh_samples_ = geom_.num_fh_samples();   // whole-row uint16 count
     row_bytes_      = geom_.row_bytes();
     num_buffers_    = 2;                            // double-buffered ring
@@ -199,6 +201,9 @@ bool ShmIqWriter::open(const std::string& shm_name, size_t total_size,
     next_row_ = 0;
     next_buf_ = 0;
 
+    std::printf("[ShmIqWriter] writer=%s (%s)\n", e3config::to_string(writer_),
+                writes_rows() ? "this process converts and writes rows"
+                              : "gNB helper writes rows; this process owns the region only");
     std::printf("[ShmIqWriter] %s opened (%zu bytes): %u buffers × %u rows × "
                 "%u bytes/row (num_fh_samples=%u)\n",
                 shm_name.c_str(), total_size,
@@ -224,10 +229,13 @@ void ShmIqWriter::close() {
     mapped_size_ = 0;
 }
 
-void ShmIqWriter::publish_row(const int16_t* iq_int16,
+bool ShmIqWriter::publish_row(const int16_t* iq_int16,
                               uint8_t& out_buffer_index,
                               uint32_t& out_write_index)
 {
+    if (!writes_rows()) {
+        return false;
+    }
     out_buffer_index = next_buf_;
     out_write_index  = next_row_;
 
@@ -259,13 +267,20 @@ void ShmIqWriter::publish_row(const int16_t* iq_int16,
         next_row_ = 0;
         next_buf_ = static_cast<uint8_t>((next_buf_ + 1) % num_buffers_);
     }
+    return true;
 }
 
-void ShmIqWriter::publish_row_cbf16(const uint8_t* iq_cbf16_bytes,
+bool ShmIqWriter::publish_row_cbf16(const uint8_t* iq_cbf16_bytes,
                                     uint16_t nof_ports,
                                     uint8_t& out_buffer_index,
                                     uint32_t& out_write_index)
 {
+    // Refuse in `writer: gnb` mode. The gNB-side helper owns the ring cursor
+    // there; advancing ours too would have both processes writing different rows
+    // and reporting indices the other invalidates -- with no error anywhere.
+    if (!writes_rows()) {
+        return false;
+    }
     out_buffer_index = next_buf_;
     out_write_index  = next_row_;
 
@@ -342,6 +357,7 @@ void ShmIqWriter::publish_row_cbf16(const uint8_t* iq_cbf16_bytes,
         next_row_ = 0;
         next_buf_ = static_cast<uint8_t>((next_buf_ + 1) % num_buffers_);
     }
+    return true;
 }
 
 }  // namespace e3sm_spectrum
