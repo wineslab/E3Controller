@@ -29,6 +29,57 @@ file(MAKE_DIRECTORY ${OUTPUT_DIR}/lib)
 # Disable tests and examples — we only need the libraries
 set(BUILD_TESTING OFF CACHE BOOL "Disable jbpf tests" FORCE)
 
+# Stop jbpf from re-initialising its own submodules.
+#
+# jbpf's CMakeLists.txt runs init_and_patch_submodules.sh when INITIALIZE_SUBMODULES
+# is ON, which is its default. That script `rm -rf`s and re-clones jbpf/3p/*, so on
+# any tree where git cannot resolve the submodules — a tarball, an `oc cp`/rsync
+# copy into a container, a git worktree — it DESTROYS the working 3p checkout and
+# then fails:
+#
+#   fatal: not a git repository
+#   cp: cannot create regular file '3p/ebpf-verifier/': Not a directory
+#
+# and the tree is left with ebpf-verifier and ubpf gone, so a plain re-configure
+# cannot recover. build.sh already populates the submodules itself
+# (jbpf/init_and_patch_submodules.sh), so there is nothing to gain from letting
+# jbpf redo it. ocudu forces the same value for the same reason
+# (ocudu CMakeLists.txt, the ENABLE_JBPF block).
+#
+# FORCE because it is a cached option in jbpf; without FORCE a stale ON from an
+# earlier configure would survive.
+set(INITIALIZE_SUBMODULES OFF CACHE BOOL "Let jbpf init its own submodules" FORCE)
+
+# Fail early and legibly if the submodules are genuinely absent, rather than
+# letting the first missing header surface hundreds of lines into the build.
+#
+# A per-module sentinel FILE, one that module actually ships.
+#
+# Two traps to avoid here, both hit while testing this:
+#   - `ck` is autotools (configure/Makefile.in), so CMakeLists.txt is the wrong
+#     sentinel for it and gives a false alarm.
+#   - `file(GLOB dir/*)` is NOT a usable emptiness test: unlike a shell glob,
+#     CMake's matches dotfiles, so a de-populated submodule that still has
+#     .git/.github looks fully populated.
+set(_jbpf_3p_checks
+  "ubpf/CMakeLists.txt"
+  "ebpf-verifier/CMakeLists.txt"
+  "mimalloc/CMakeLists.txt"
+  "ck/configure")
+foreach(_jbpf_3p_file IN LISTS _jbpf_3p_checks)
+  if(NOT EXISTS "${CMAKE_SOURCE_DIR}/jbpf/3p/${_jbpf_3p_file}")
+    message(FATAL_ERROR
+      "jbpf/3p/${_jbpf_3p_file} is missing, so jbpf's third-party submodules are "
+      "not populated. jbpf's own auto-init is disabled here (see above, it would "
+      "destroy them), so populate them yourself:\n"
+      "  git submodule update --init --recursive   # then\n"
+      "  ./jbpf/init_and_patch_submodules.sh\n"
+      "or, for a copied tree with no git metadata, copy jbpf/ wholesale from a "
+      "working checkout.")
+  endif()
+endforeach()
+unset(_jbpf_3p_checks)
+
 # Override add_test and set_tests_properties so jbpf subdir doesn't register tests
 macro(add_test)
 endmacro()

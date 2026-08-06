@@ -12,7 +12,7 @@
 #      grammar expects is produced. We also apt-install a small set of extras
 #      the E3Controller itself needs (python + pip for jbpf's build).
 #   1. fetch submodules (libe3 @ pinned tag, jbpf)
-#   2. init + patch jbpf's own 3p submodules
+#   2. init + patch jbpf's own 3p submodules, then apply our patch to jbpf core
 #   3. configure libe3, stage asn1c's BOOLEAN.* skeletons (toolchain workaround),
 #      then build + INSTALL to /usr/local (both encoders -> runtime --encoding)
 #   4. build the E3Controller (jbpf is built in-tree via add_subdirectory)
@@ -126,10 +126,14 @@ echo "==> [1/4] Fetching submodules (libe3, jbpf)"
 git submodule update --init --recursive
 
 # ---------------------------------------------------------------------------
-# Step 2: jbpf's own 3p submodules
+# Step 2: jbpf's own 3p submodules, then jbpf core
 # ---------------------------------------------------------------------------
 echo "==> [2/4] Initialising + patching jbpf 3p submodules"
 ( cd jbpf && bash ./init_and_patch_submodules.sh )
+
+# Then our own patches against jbpf core, which that script knows nothing
+# about (it is upstream jbpf's, so edits to it are lost on re-clone).
+bash ./apply_jbpf_patches.sh
 
 # ---------------------------------------------------------------------------
 # Step 3: libe3

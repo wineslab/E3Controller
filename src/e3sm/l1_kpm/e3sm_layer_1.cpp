@@ -19,6 +19,133 @@
 #include <cstdio>
 #include <ctime>
 #include <fstream>
+#include <sstream>
+
+/* ---------------------------------------------------------------------------
+ * Drop accounting
+ *
+ * The point of naming every reason separately: "we dropped 4000 slots" is not
+ * actionable, whereas "4000 NoSubscribers" (nobody had subscribed yet) and
+ * "4000 RanPublishedNothing" (the gNB helper never wrote a row) call for
+ * completely different fixes, and one of them is not even a fault.
+ * ------------------------------------------------------------------------- */
+
+const char* E3SMLayer1::drop_name(Drop d) {
+    switch (d) {
+    case Drop::NotRunning:          return "not_running";
+    case Drop::SlotFiltered:        return "slot_filtered";
+    case Drop::GeometryMismatch:    return "geometry_mismatch";
+    case Drop::NoIq:                return "no_iq";
+    case Drop::BlobTooSmall:        return "blob_too_small";
+    case Drop::RanPublishedNothing: return "ran_published_nothing";
+    case Drop::NoSubscribers:       return "no_subscribers";
+    case Drop::EncodeFailed:        return "encode_failed";
+    case Drop::EmitFailed:          return "emit_failed";
+    case Drop::COUNT:               break;
+    }
+    return "unknown";
+}
+
+uint64_t E3SMLayer1::total_drops() const {
+    uint64_t t = 0;
+    for (std::size_t i = 0; i < kDropCount; ++i) {
+        t += drops_[i].load(std::memory_order_relaxed);
+    }
+    return t;
+}
+
+void E3SMLayer1::note_drop(Drop d) {
+    drops_[static_cast<std::size_t>(d)].fetch_add(1, std::memory_order_relaxed);
+    maybe_log_drops();
+}
+
+void E3SMLayer1::maybe_log_drops() {
+    /* Throttle to <=1/s. Without this, a condition that drops EVERY slot -- no
+     * subscriber yet, or a geometry mismatch -- would emit a line and a CSV row
+     * at slot rate (2000/s), which is both useless and a real cost on the
+     * worker thread. */
+    const auto now = std::chrono::steady_clock::now();
+    if (drops_last_report_.time_since_epoch().count() != 0 &&
+        now - drops_last_report_ < std::chrono::seconds(1)) {
+        return;
+    }
+    drops_last_report_ = now;
+
+    const uint64_t total = total_drops();
+    if (total == drops_last_total_) {
+        return;  /* nothing new since the last report */
+    }
+    const uint64_t since = total - drops_last_total_;
+    drops_last_total_    = total;
+
+    /* Live line, so a run that is silently dropping everything is visible
+     * without waiting for shutdown or opening the CSV. */
+    std::fprintf(stderr,
+        "[E3SMLayer1] dropped %lu slot(s) in the last second (%lu total, %lu published)\n",
+        static_cast<unsigned long>(since),
+        static_cast<unsigned long>(total),
+        static_cast<unsigned long>(published_slots()));
+
+    if (stats_log_path_.empty()) {
+        return;  /* counters still maintained; only the CSV is opt-in */
+    }
+    if (!drops_log_.is_open()) {
+        /* Sibling of the stage CSV, same convention e3_controller.cpp uses for
+         * the Spectrum SM's path: insert the suffix before the extension. */
+        const std::size_t dot   = stats_log_path_.find_last_of('.');
+        const std::size_t slash = stats_log_path_.find_last_of('/');
+        const bool has_ext = (dot != std::string::npos &&
+                              (slash == std::string::npos || dot > slash));
+        const std::string path = has_ext
+            ? stats_log_path_.substr(0, dot) + "_drops" + stats_log_path_.substr(dot)
+            : stats_log_path_ + "_drops";
+        drops_log_.open(path, std::ios::out | std::ios::trunc);
+        if (!drops_log_.is_open()) {
+            std::fprintf(stderr, "[E3SMLayer1] cannot open drop log %s\n", path.c_str());
+            stats_log_path_.clear();   /* do not retry every second */
+            return;
+        }
+        drops_log_ << "uptime_s,published,dropped_total";
+        for (std::size_t i = 0; i < kDropCount; ++i) {
+            drops_log_ << ',' << drop_name(static_cast<Drop>(i));
+        }
+        drops_log_ << '\n';
+        drops_log_start_ = now;
+    }
+
+    const double uptime_s =
+        std::chrono::duration<double>(now - drops_log_start_).count();
+    drops_log_ << uptime_s << ',' << published_slots() << ',' << total;
+    for (std::size_t i = 0; i < kDropCount; ++i) {
+        drops_log_ << ',' << drops_[i].load(std::memory_order_relaxed);
+    }
+    drops_log_ << '\n';
+    drops_log_.flush();   /* a crash mid-run must not lose the accounting */
+}
+
+std::string E3SMLayer1::drops_summary() const {
+    const uint64_t total = total_drops();
+    const uint64_t pub   = published_slots();
+
+    std::ostringstream os;
+    os << "[E3SMLayer1] slots published: " << pub << ", dropped: " << total;
+    if (total == 0) {
+        os << " (none)";
+        return os.str();
+    }
+    /* Share of everything that reached this SM, which is the number worth
+     * quoting: dropped/(published+dropped), not dropped/published. */
+    const double pct = 100.0 * static_cast<double>(total) /
+                       static_cast<double>(total + pub);
+    os << " (" << pct << "% of arrivals)";
+    for (std::size_t i = 0; i < kDropCount; ++i) {
+        const uint64_t c = drops_[i].load(std::memory_order_relaxed);
+        if (c != 0) {
+            os << "\n    " << drop_name(static_cast<Drop>(i)) << ": " << c;
+        }
+    }
+    return os.str();
+}
 
 libe3::ErrorCode E3SMLayer1::init() {
     if (!shm_writer_.open(shm_name_, shm_size_, geom_, cbf16_scale_, writer_mode_)) {
@@ -111,7 +238,7 @@ std::vector<uint8_t> E3SMLayer1::ran_function_data() const {
 }
 
 void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
-    if (!running_) return;
+    if (!running_) { note_drop(Drop::NotRunning); return; }
 
     // Optional single-slot filter (debug/diagnostic): target_slot_ is
     // the absolute slot index within a radio frame (subframe_id*2 +
@@ -122,7 +249,7 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
         // directly rather than recomputing from subframe_id with a hardcoded
         // 2 slots/subframe that only held at 30 kHz SCS.
         const int abs_slot = static_cast<int>(s.slot_id);
-        if (abs_slot != target_slot_) return;
+        if (abs_slot != target_slot_) { note_drop(Drop::SlotFiltered); return; }
     }
 
     // Validate the CONFIGURED geometry against what the RAN actually reports,
@@ -143,6 +270,7 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
         }
     }
     if (!geometry_ok_) {
+        note_drop(Drop::GeometryMismatch);
         return;
     }
 
@@ -152,25 +280,76 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     const uint16_t ports_clamped =
         (s.nof_ports == 0) ? 1u
         : (s.nof_ports > geom_.nof_ports ? geom_.nof_ports : s.nof_ports);
-    const uint32_t kPerAntBytes = geom_.cbf16_bytes_per_ant();
-    const uint32_t kExpectedBytes = static_cast<uint32_t>(ports_clamped) * kPerAntBytes;
-    if (s.iq == nullptr || s.iq_size_bytes < kExpectedBytes) {
-        std::fprintf(stderr,
-            "[E3SMLayer1] Slot blob too small: %u bytes (need >= %u). "
-            "Grid shape mismatch (nof_ports=%u nof_symbols=%u nof_subc=%u)?\n",
-            s.iq_size_bytes, kExpectedBytes,
-            s.nof_ports, s.nof_symbols, s.nof_subcarriers);
-        return;
+    if (shm_writer_.writes_rows()) {
+        /* Controller mode: the blob must carry every antenna port we intend to
+         * publish. Catches a grid-shape drift (e.g. ocudu shipping fewer ports
+         * than nof_ports claims). */
+        const uint32_t kPerAntBytes   = geom_.cbf16_bytes_per_ant();
+        const uint32_t kExpectedBytes = static_cast<uint32_t>(ports_clamped) * kPerAntBytes;
+        if (s.iq == nullptr || s.iq_size_bytes == 0) {
+            /* Not a grid-shape problem: zero bytes means the codelet published a
+             * DESCRIPTOR, i.e. it ran the gNB-side publish path, while this
+             * controller is configured to convert the IQ itself. The shipped
+             * codelet only does the descriptor path, so `shm.writer: controller`
+             * cannot work with it. Warn once — at slot rate this would otherwise
+             * bury the log. */
+            if (!writer_mode_warned_) {
+                writer_mode_warned_ = true;
+                std::fprintf(stderr,
+                    "[E3SMLayer1] shm.writer is 'controller' but the codelet published a "
+                    "descriptor with no IQ (0 bytes).\n"
+                    "  The shipped uplink_slot_samples codelet writes rows via the gNB-side "
+                    "helper and sends only a ~64 B descriptor,\n"
+                    "  so the controller has nothing to convert. Set shm.writer: gnb in the "
+                    "config.\n"
+                    "  (Grid dims reported by the RAN are fine: %u ports x %u sym x %u subc.)\n",
+                    s.nof_ports, s.nof_symbols, s.nof_subcarriers);
+            }
+            note_drop(Drop::NoIq);
+            return;
+        }
+        if (s.iq_size_bytes < kExpectedBytes) {
+            std::fprintf(stderr,
+                "[E3SMLayer1] Slot blob too small: %u bytes (need >= %u). "
+                "Grid shape mismatch (nof_ports=%u nof_symbols=%u nof_subc=%u)?\n",
+                s.iq_size_bytes, kExpectedBytes,
+                s.nof_ports, s.nof_symbols, s.nof_subcarriers);
+            note_drop(Drop::BlobTooSmall);
+            return;
+        }
+    } else {
+        /* gNB mode: no IQ crosses the jbpf ring — the helper already wrote the
+         * row. What can go wrong here is the helper REFUSING, which it signals
+         * with TRUNCATED and bytes_written == 0 rather than writing a partial
+         * row. Publishing an Indication for that would point the dApp at a row
+         * nobody wrote. */
+        if ((s.flags & E3_SLOT_FLAG_TRUNCATED) != 0 || s.bytes_written == 0) {
+            if (!truncated_warned_) {
+                truncated_warned_ = true;
+                std::fprintf(stderr,
+                    "[E3SMLayer1] gNB helper published nothing for this slot "
+                    "(flags=0x%02x bytes_written=%u, grid %u ports x %u sym x %u subc). "
+                    "Check that the region geometry matches and that the helper attached.\n",
+                    s.flags, s.bytes_written, s.nof_ports, s.nof_symbols, s.nof_subcarriers);
+            }
+            note_drop(Drop::RanPublishedNothing);
+            return;
+        }
     }
 
     using clock = std::chrono::steady_clock;
 
-    // CLOCK_REALTIME ns at on_sample entry. Same domain as
+    // CLOCK_MONOTONIC ns at on_sample entry. Same domain as
     // s.gnb_ts_ns / s.codelet_ts_ns / s.dispatch_ts_ns, so the four
     // RAN-side stage durations subtract cleanly into statistics_layer1.log.
+    //
+    // Was CLOCK_REALTIME; the entire chain moved together. Monotonic matches
+    // latrec's clock (so stage rows and rings join without an offset) and cannot
+    // be stepped by NTP mid-run, which is what the saturating subtractions below
+    // were defending against.
     auto realtime_ns_now = []() -> uint64_t {
         struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
+        clock_gettime(CLOCK_MONOTONIC, &ts);
         return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
                static_cast<uint64_t>(ts.tv_nsec);
     };
@@ -181,6 +360,10 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
         agent_ ? agent_->config().encoding : libe3::EncodingFormat::ASN1;
     const auto subs = get_subscribers();
     if (subs.empty()) {
+        /* Counted, but NOT a fault: before the first dApp subscribes every slot
+         * lands here, so a large no_subscribers count on a healthy run is
+         * normal and is exactly why the summary breaks reasons out. */
+        note_drop(Drop::NoSubscribers);
         return;  // No one is listening; nothing to publish.
     }
 
@@ -236,6 +419,7 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
         std::fprintf(stderr,
             "[E3SMLayer1] Failed to %s-encode indication (buf=%u row=%u)\n",
             want_json ? "JSON" : "APER", fh_buf_idx, fh_write_idx);
+        note_drop(Drop::EncodeFailed);
         return;
     }
 
@@ -251,18 +435,49 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
             std::fprintf(stderr,
                 "[E3SMLayer1] Failed to send indication to dApp %u: %s\n",
                 dapp_id, libe3::error_code_to_string(rc));
+            /* Per-DAPP, so with several subscribers one slot can bump this more
+             * than once while still being published to the others. That makes
+             * emit_failed the one counter which is not mutually exclusive with
+             * a successful publish -- deliberate, since the alternative (drop
+             * the slot from the count entirely) would hide a partial fan-out. */
+            note_drop(Drop::EmitFailed);
         }
     }
     const auto t_emit_end = clock::now();
 
     // --- Per-slot statistics (disabled unless --stats-log was given) ---
-    ++slot_publish_seq_;
+    const uint64_t publish_seq =
+        slot_publish_seq_.fetch_add(1, std::memory_order_relaxed) + 1;
     if (stats_log_path_.empty()) {
         return;
     }
     // Schema:
     //   slot_seq,
-    //   gnb_to_codelet_us,     ocudu hook -> codelet entry (jbpf invocation)
+    //   gnb_to_codelet_us,     NOT "hook -> codelet entry". This is
+    //                          hook -> END of the codelet, and in `writer: gnb`
+    //                          mode that INCLUDES the whole data plane:
+    //
+    //                            gnb_ts_ns    clock_gettime(CLOCK_MONOTONIC) taken
+    //                                         immediately before the hook fires, on
+    //                                         the last symbol of the slot, i.e. when
+    //                                         the resource grid is complete
+    //                                         (upper_phy_rx_symbol_handler_impl.cpp:73)
+    //                            ...          ubpf JIT dispatch + the codelet's
+    //                                         bounds-check ladder
+    //                            ...          jbpf_e3_publish_slot(): the bf16 -> fp16
+    //                                         AVX2/F16C convert AND the full
+    //                                         733,824-byte row write into
+    //                                         /e3_ran_buffers
+    //                            codelet_ts_ns  jbpf_time_get_ns() at the END of the
+    //                                         codelet (uplink_slot_collect.c:220,
+    //                                         after the publish call at :174-180)
+    //
+    //                          So read this column as "gNB hook -> the IQ is in
+    //                          shared memory", not as jbpf invocation overhead.
+    //                          Sanity check: the standalone convert benchmarks at
+    //                          66.5 us for a 4-port slot against a measured p50 of
+    //                          ~71 us, so the copy is ~94% of this stage and jbpf
+    //                          dispatch is only the remaining ~4-5 us.
     //   codelet_to_dispatch_us,codelet -> controller dispatcher poll
     //   dispatch_to_handler_us,dispatcher -> on_sample (SPSC queue wait)
     //   shm_ns,                publish_row_cbf16 cost
@@ -270,10 +485,11 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     //   emit_ns,               emit_outbound fan-out (SM-side enqueue) cost
     //   nof_subc, iq_bytes     slot size (handy if BWP changes)
     //
-    // The three "us" stages are derived from RAN-side CLOCK_REALTIME ns
-    // stamps (gNB -> codelet -> dispatcher -> handler). The post-encode
-    // ZMQ-send stage lives in libe3's publisher-stage CSV, joinable by
-    // message_id.
+    // The three "us" stages are derived from RAN-side CLOCK_MONOTONIC ns
+    // stamps (gNB -> codelet -> dispatcher -> handler). Because that is also
+    // latrec's clock, these absolute stamps and the latrec rings can be joined
+    // directly -- no mono/real offset arithmetic. The post-encode ZMQ-send stage
+    // lives in libe3's outbound latrec leg (L0..L3).
     if (!stats_log_.is_open()) {
         stats_log_.open(stats_log_path_, std::ios::out | std::ios::trunc);
         stats_log_ << "slot_seq,"
@@ -289,7 +505,7 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     auto sat_us = [](uint64_t lhs, uint64_t rhs) -> uint64_t {
         return (lhs > rhs) ? ((lhs - rhs) / 1000ULL) : 0ULL;
     };
-    stats_log_ << slot_publish_seq_ << ','
+    stats_log_ << publish_seq << ','
                << sat_us(s.codelet_ts_ns,  s.gnb_ts_ns)      << ','
                << sat_us(s.dispatch_ts_ns, s.codelet_ts_ns)  << ','
                << sat_us(handler_entry_ns, s.dispatch_ts_ns) << ','

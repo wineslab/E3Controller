@@ -84,9 +84,30 @@ struct RadioGeometry {
     bool validate(std::string& err) const;
 };
 
+/*
+ * TODO: leave only one mode.
+ * Which process converts the resource grid and writes the fp16 rows.
+ * Mode: Controller/gnb
+ * Either way the controller OWNS the region: it creates, sizes, zero-fills and
+ * headers it, and tears it down. The helper only ever attaches.
+ */
+enum class ShmWriter {
+    Controller,
+    Gnb,
+};
+
+const char* to_string(ShmWriter w);
+
 struct ShmConfig {
     std::string name       = "/e3_ran_buffers";
     size_t      size_bytes = static_cast<size_t>(1) << 30;
+
+    /* Default is Gnb because it is the only mode the SHIPPED CODELET supports:
+     * uplink_slot_collect.c publishes a ~64 B e3_slot_desc and calls the gNB-side
+     * helper, so no IQ ever crosses the jbpf ring. Controller mode needs a
+     * copy-based codelet, which does not currently exist in this repo — selecting
+     * it yields "Slot blob too small: 0 bytes" on every slot. */
+    ShmWriter writer = ShmWriter::Gnb;
 
     /*
      * bf16 -> fp16 scale. Was the E3_CBF16_SCALE environment variable.

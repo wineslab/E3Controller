@@ -27,6 +27,9 @@
 
 #include <atomic>
 #include <cstddef>
+#include <atomic>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <string>
@@ -70,7 +73,45 @@ public:
         uint32_t request_message_id,
         const libe3::DAppControlAction& action) override;
 
+    enum class Drop : uint8_t {
+        NotRunning = 0,      /* stopped, or a straggler after stop() */
+        SlotFiltered,        /* target_slot filter excluded it (deliberate)   */
+        GeometryMismatch,    /* config vs RAN disagreement; latched refusal   */
+        NoIq,                /* controller mode, but codelet sent descriptor  */
+        BlobTooSmall,        /* short blob; a partial row would be wrong data */
+        RanPublishedNothing, /* gNB helper flagged TRUNCATED / wrote 0 bytes  */
+        NoSubscribers,       /* nobody subscribed to RF=2 yet                 */
+        EncodeFailed,        /* APER/JSON encode error                        */
+        EmitFailed,          /* libe3 rejected the outbound enqueue           */
+        COUNT
+    };
+    static constexpr std::size_t kDropCount = static_cast<std::size_t>(Drop::COUNT);
+    static const char*           drop_name(Drop d);
+
+    /* Relaxed loads: on_sample writes these on the worker thread while the
+     * summary reads them from main.*/
+    uint64_t drop_count(Drop d) const {
+        return drops_[static_cast<std::size_t>(d)].load(std::memory_order_relaxed);
+    }
+    uint64_t total_drops() const;
+    uint64_t published_slots() const {
+        return slot_publish_seq_.load(std::memory_order_relaxed);
+    }
+
+    /* Multi-line human summary: published, total dropped, and each non-zero
+     * reason. Returns the "nothing dropped" line when all counters are zero,
+     * so the caller can print it unconditionally. */
+    std::string drops_summary() const;
+
 private:
+    /* Bump a reason. Also drives the throttled live log line. */
+    void note_drop(Drop d);
+
+    /* Append a cumulative row to <stats_log_path_ + "_drops">, at most once a
+     * second. Cumulative rather than per-interval so a row is meaningful on its
+     * own and a missed flush cannot lose events. No-op when stats logging is off. */
+    void maybe_log_drops();
+
     /* SlotIqPipeline consumer callback (worker thread). Receives one
      * fully-assembled UL slot from ocudu's resource grid. */
     void on_sample(const e3sm_pipeline::SlotSample& s);
@@ -106,12 +147,32 @@ private:
     bool geometry_checked_{false};
     bool geometry_ok_{true};
 
+    /* One-shot warning when the gNB helper reports it published nothing, so a
+     * persistent misconfiguration does not flood the log at slot rate. */
+    bool truncated_warned_{false};
+
+    /* One-shot: controller mode configured but the codelet only sends descriptors. */
+    bool writer_mode_warned_{false};
+
     /* Per-slot stats. slot_publish_seq_ increments for every slot
      * we publish; counts indications emitted to dApps. stats_log_ is
      * opened lazily on the first published slot when stats_log_path_
-     * is non-empty. */
-    uint64_t      slot_publish_seq_{0};
-    std::ofstream stats_log_;
+     * is non-empty.
+     *
+     * Atomic because the shutdown summary reads it from the main thread while
+     * on_sample increments it on the worker. */
+    std::atomic<uint64_t> slot_publish_seq_{0};
+    std::ofstream         stats_log_;
+
+    /* Drop accounting -- see enum Drop. */
+    std::atomic<uint64_t> drops_[kDropCount]{};
+    std::ofstream         drops_log_;
+    /* Throttles both the live stderr line and the CSV row to <=1/s, so a
+     * pathological run cannot turn drop reporting into the bottleneck. */
+    std::chrono::steady_clock::time_point drops_last_report_{};
+    uint64_t                              drops_last_total_{0};
+    /* Set when the drop CSV is opened, so uptime_s starts at 0 in the file. */
+    std::chrono::steady_clock::time_point drops_log_start_{};
 
     /* Encoded indication payload (one encoding per the agent config).
      * Capacity grows on first use, reused across slots. */

@@ -457,6 +457,28 @@ the blacklist to the RAN scheduler is not implemented. The
 marks the spot. dApps that rely on the control side-effect (rather than just the
 ACK) will not see scheduler behaviour change.
 
+### Slot buffer size is compile-time in the codelet
+
+The radio geometry is runtime configuration on the controller side (`radio:` in the YAML),
+but `MAX_SLOT_IQ_BYTES` in
+[`codelets/uplink_slot_samples/uplink_slot_data.h`](codelets/uplink_slot_samples/uplink_slot_data.h)
+is still a compile-time constant — currently `733824`, i.e. 4 ports x 14 symbols x 3276
+subcarriers x 4 bytes.
+
+This one is **not** an oversight and cannot be made runtime: it sizes the codelet's
+jbpf output-map struct, and the eBPF verifier requires compile-time-known struct sizes.
+`src/e3sm/slot_iq_pipeline.h` includes that header, so the controller's view of the sample
+is sized by it too.
+
+Consequence: raising the antenna count **above** what the constant covers (e.g. 8x8) needs
+the constant changed and the codelet rebuilt and re-verified, even though nothing on the
+controller side needs recompiling. Lowering it is fine — a 2x2 config just uses less of the
+row.
+
+This does not fail silently. The controller validates its configured geometry against what
+the RAN reports in the first slot and refuses to publish on a mismatch, and the gNB-side
+publish helper refuses a slot larger than the row rather than writing a prefix.
+
 ### No verification at codelet load time
 
 Codelets are verified **offline**, at build time (see [Codelets](#codelets)). The gNB does

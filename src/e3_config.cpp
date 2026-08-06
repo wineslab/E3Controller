@@ -194,6 +194,8 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
         return false;
     }
 
+    bool lcm_explicit = false;
+
     try {
         /* ---- radio ---- */
         if (const auto n = root["radio"]) {
@@ -229,7 +231,15 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
             get(n, "ipc_name", out.jbpf.ipc_name);
             get(n, "run_path", out.jbpf.run_path);
             get(n, "mem_size_bytes", out.jbpf.mem_size_bytes);
-            get(n, "lcm_socket_path", out.jbpf.lcm_socket_path);
+            /* Derive from run_path unless explicitly set. The gNB composes
+             * <jbpf_run_path>/<jbpf_namespace>/<jbpf_lcm_ipc_name>, so an
+             * independent absolute default here (it used to be /tmp/...) drifts
+             * from the gNB the moment run_path is anything but /tmp — which is
+             * exactly what happens in the standard /dev/shm deployment. */
+            if (n["lcm_socket_path"]) {
+                out.jbpf.lcm_socket_path = n["lcm_socket_path"].as<std::string>();
+                lcm_explicit = true;
+            }
             get(n, "codelet_base_path", out.jbpf.codelet_base_path);
         }
 
@@ -279,6 +289,10 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
     } catch (const std::exception& e) {
         err = std::string("error parsing '") + path + "': " + e.what();
         return false;
+    }
+
+    if (!lcm_explicit) {
+        out.jbpf.lcm_socket_path = out.jbpf.run_path + "/jbpf/jbpf_lcm_ipc";
     }
 
     if (!out.radio.validate(err)) {

@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cerrno>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <getopt.h>
 #include <atomic>
 #include <pthread.h>
@@ -188,6 +189,26 @@ int main(int argc, char** argv)
     }
     e3config::print_config(config);
 
+    /* The LCM socket is created by the gNB, so its absence usually means the gNB
+     * is not up yet or the two disagree on the path. Say which, here, rather than
+     * letting it surface later as a codeletset load failure whose message
+     * ("is srsRAN running?") points at the wrong thing.
+     *
+     * Not fatal: the controller is the IPC PRIMARY and is supposed to start
+     * first, so at this point the gNB legitimately may not exist yet. */
+    {
+        struct stat st;
+        if (::stat(config.jbpf.lcm_socket_path.c_str(), &st) != 0) {
+            std::fprintf(stderr,
+                "[E3Controller] NOTE: LCM socket '%s' does not exist yet.\n"
+                "  Codelet loading will fail until it appears. The gNB composes this path as\n"
+                "  <jbpf_run_path>/<jbpf_namespace>/<jbpf_lcm_ipc_name> from its own YAML — with\n"
+                "  the usual /dev/shm + jbpf + jbpf_lcm_ipc that is /dev/shm/jbpf/jbpf_lcm_ipc.\n"
+                "  If the gNB is already running, jbpf.run_path here (%s) disagrees with it.\n",
+                config.jbpf.lcm_socket_path.c_str(), config.jbpf.run_path.c_str());
+        }
+    }
+
     // E3 agent configuration — single encoding on a single channel.
     std::string ran_id = "ocudu-janus";
 
@@ -343,6 +364,13 @@ int main(int argc, char** argv)
     slot_pipeline_cfg.lcm_socket_path   = config.jbpf.lcm_socket_path;
     slot_pipeline_cfg.codelet_base_path = config.jbpf.codelet_base_path;
     slot_pipeline_cfg.worker_core       = config.threads.worker_core;
+    /* Gnb mode: the pipeline tells the codelet (and through it the gNB-side
+     * helper) where /e3_ran_buffers is and what shape its rows are. The
+     * controller owns the region, so it is the one that gets to say. */
+    slot_pipeline_cfg.writer            = config.shm.writer;
+    slot_pipeline_cfg.shm_name          = config.shm.name;
+    slot_pipeline_cfg.radio             = config.radio;
+    slot_pipeline_cfg.cbf16_scale       = config.shm.cbf16_scale;
     e3sm_pipeline::SlotIqPipeline slot_iq_pipeline(dispatcher, io_ctx,
                                                    std::move(slot_pipeline_cfg));
 
@@ -359,7 +387,13 @@ int main(int argc, char** argv)
                   << libe3::error_code_to_string(sm_result) << "\n";
         return 1;
     }
-    sm_result = agent.register_sm(std::make_unique<E3SMLayer1>(slot_iq_pipeline, agent, config));
+    /* Keep a borrowed pointer so the shutdown path can print the drop
+     * accounting. The agent owns the SM and outlives this scope's use of the
+     * pointer (the summary is printed before `agent` is destroyed), so this is a
+     * read-only borrow, not a lifetime claim. */
+    auto        layer1_sm  = std::make_unique<E3SMLayer1>(slot_iq_pipeline, agent, config);
+    E3SMLayer1* layer1_ptr = layer1_sm.get();
+    sm_result = agent.register_sm(std::move(layer1_sm));
     if (sm_result != libe3::ErrorCode::SUCCESS) {
         std::cerr << "Failed to register L1-KPM SM (RF=2): "
                   << libe3::error_code_to_string(sm_result) << "\n";
@@ -442,6 +476,26 @@ int main(int argc, char** argv)
     iq_pipeline.stop();
     std::printf("[E3Controller] Shutting down jbpf IO...\n");
     jbpf_io_stop();
+
+    /* Drop accounting, printed AFTER both pipelines have joined their workers so
+     * the counters are final and no thread is still incrementing them.
+     *
+     * Two independent sources, because a slot can be lost in two places and
+     * conflating them would point at the wrong fix:
+     *
+     *   SlotIqPipeline  the SPSC queue between the jbpf dispatcher and the
+     *                   worker was full -- the controller could not keep up.
+     *   E3SMLayer1      the slot reached the SM but did not become an
+     *                   indication, broken out by reason.
+     *
+     * Neither can see a slot the RAN never produced: under TDD only UL slots
+     * fire the hook, so a missing slot index is not necessarily a loss. */
+    std::printf("\n[E3Controller] --- drop accounting ---\n");
+    const uint64_t queue_drops = slot_iq_pipeline.dropped_samples();
+    std::printf("[SlotIqPipeline] slots dropped on a full SPSC queue: %lu\n",
+                static_cast<unsigned long>(queue_drops));
+    std::printf("%s\n", layer1_ptr->drops_summary().c_str());
+
     std::printf("[E3Controller] Stopped.\n");
 
     return 0;
