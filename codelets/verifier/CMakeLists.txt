@@ -20,9 +20,16 @@ add_executable(e3_verifier_cli e3_verifier_cli.cpp)
 
 target_link_libraries(e3_verifier_cli PRIVATE jbpf::verifier_lib)
 
+set(_e3v_jbpf "${CMAKE_CURRENT_SOURCE_DIR}/../../jbpf")
 target_include_directories(e3_verifier_cli PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include   # jbpf_e3_ids.h
   ${OCUDU_JANUS_INC}                       # jbpf_srsran_contexts.h (contract)
+  ${_e3v_jbpf}/src/verifier                # jbpf_verifier.hpp
+  ${_e3v_jbpf}/src/verifier/specs
+  ${_e3v_jbpf}/src/common                  # jbpf_defs.h, jbpf_helper_api_defs_ext.h
+  ${_e3v_jbpf}/3p/ebpf-verifier/src        # spec_type_descriptors.hpp, platform.hpp
+  ${_e3v_jbpf}/3p/ebpf-verifier/src/main
+  ${_e3v_jbpf}/3p/ebpf-verifier/external
 )
 
 set_target_properties(e3_verifier_cli PROPERTIES
