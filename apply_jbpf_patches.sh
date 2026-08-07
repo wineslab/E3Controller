@@ -2,19 +2,6 @@
 #
 # Apply this repo's patches against the jbpf submodule.
 #
-# jbpf's OWN patches - the ones for its vendored 3p submodules (3p/ck,
-# 3p/mimalloc, 3p/ebpf-verifier) - are not our business: jbpf ships them in
-# jbpf/patches/ and applies them from jbpf/init_and_patch_submodules.sh, which
-# build.sh runs first. This script covers only what we add on top.
-#
-# Our patches live in jbpf_patches/ at the root of THIS repo. Two places they
-# deliberately do not live:
-#
-#   jbpf/patches/  belongs to the jbpf submodule. A file we add there is
-#                  untracked by us, absent from a fresh clone, and lost to
-#                  `git submodule update --force`.
-#   patches/       is excluded by .gitignore (line 5).
-#
 # Run after `git submodule update --init --recursive` and before configuring.
 # build.sh calls it as step 2; it is also safe to run by hand.
 #
