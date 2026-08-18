@@ -1,4 +1,10 @@
-# E3Controller configuration.
+# E3Controller configuration -- ASN.1 (APER) variant.
+#
+# Start with:  e3_controller --config configs/e3_controller_asn1.yaml
+# and the dApp with:  ./start_dapp.sh --encoding asn1 --cores ...
+#
+# Differs from e3_controller.yaml ONLY in the e3: block (encoding + the
+# three ports). Everything else is identical on purpose.
 #
 # This is the only argument the controller takes:  e3_controller --config <this file>
 #
@@ -134,21 +140,27 @@ jbpf:
 # adaptive_cpu dApp uses (with ports 5555/5556/5557).
 # ---------------------------------------------------------------------------
 e3:
-  # JSON, because the adaptive_cpu dApp on feat/latency-tracing is JSON-ONLY:
-  # it ships no asn1_receiver and parses no --encoding flag, and its
-  # config/e3_config.json declares the NVIDIA_L1 agent on 5555/5556/5557. ASN.1
-  # here would leave the two talking past each other on different ports.
+  # ASN.1 (APER). This file is the sibling of e3_controller.yaml, which serves
+  # JSON; keep every other key in the two identical so a json-vs-asn1 comparison
+  # measures the encoding and nothing else.
   #
-  # (The dApp's `feat/asn` branch does speak APER on 9990/9991/9999, but it
-  # deliberately excludes the latency instrumentation, so it is not the branch
-  # to use for a tracing run.)
-  encoding:        json   # asn1 | json
+  # The three ports below are NOT free parameters. The dApp's ASN.1 path builds a
+  # libe3 E3Agent in DAPP role and takes libe3's E3Config DEFAULTS
+  # (/usr/local/include/libe3/types.hpp:373-375):
+  #
+  #     setup_port{9990}   subscriber_port{9999}   publisher_port{9991}
+  #
+  # They are not read from the dApp's config/e3_config.json -- that file's ports
+  # (5555/5556/5557) belong to the JSON E3Manager path only. Change these and the
+  # dApp will not find the controller, with no error on either side: they simply
+  # sit on different ports and no indication ever arrives.
+  encoding:        asn1   # asn1 | json
   link_layer:      zmq    # zmq | posix
   transport:       tcp    # tcp | ipc | sctp
-  # Must match e3_manager.e3_agents[NVIDIA_L1] in the dApp's e3_config.json.
-  setup_port:      5555   # agent_rep_port
-  publisher_port:  5556   # agent_pub_port
-  subscriber_port: 5557   # agent_sub_port
+  # Must match libe3's E3Config defaults -- see the note above.
+  setup_port:      9990   # libe3 E3Config default
+  publisher_port:  9991   # libe3 E3Config default
+  subscriber_port: 9999   # libe3 E3Config default
 
 # ---------------------------------------------------------------------------
 # Thread placement. -1 = no pinning (the poll thread then sleeps between polls
@@ -183,7 +195,11 @@ logging:
   # column per reason (no_subscribers, ran_published_nothing, blob_too_small,
   # ...). The drop COUNTERS themselves are always on: the throttled live stderr
   # line and the shutdown summary do not depend on this path.
-  stats_log_path: "/tmp/e3c_stages.csv"
+  # Distinct from the JSON config's /tmp/e3c_stages.csv ON PURPOSE: the two
+  # runs would otherwise write the same file and the second would silently
+  # overwrite the first. The drop CSV follows it automatically as
+  # /tmp/e3c_stages_asn1_drops.csv.
+  stats_log_path: "/tmp/e3c_stages_asn1.csv"
 
 # ---------------------------------------------------------------------------
 # Legacy controller-side single-slot filter: slot index within a 10 ms frame

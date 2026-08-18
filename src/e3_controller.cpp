@@ -27,6 +27,7 @@
 #include <atomic>
 #include <pthread.h>
 #include <sched.h>
+#include "libe3_stamp.h"   // generated: which libe3 we linked against
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
@@ -159,8 +160,52 @@ static void print_usage(const char* prog)
                 prog);
 }
 
+/* Report which libe3 this binary was linked against, and shout if /usr/local has
+ * moved on since.
+ *
+ * libe3 is linked STATICALLY (libe3::libe3 is STATIC IMPORTED -> liblibe3.a), so
+ * `cmake --install libe3/build` has no effect on an already-built controller and
+ * leaves no runtime trace. Editing SLEEP_DURATION, reinstalling, and forgetting
+ * to relink yields a controller that still has the old value with nothing to
+ * indicate it -- the only symptom is a queue-wait distribution that quietly
+ * refuses to move. Comparing the .a's mtime against our own is enough to catch
+ * it, and needs no build-time bookkeeping beyond the stamp header. */
+static void report_libe3_provenance()
+{
+    std::cout << "[libe3] linked " << LIBE3_STAMP_VERSION
+              << " static, SLEEP_DURATION=" << LIBE3_STAMP_SLEEP_US << "us"
+              << ", build type '" << LIBE3_STAMP_BUILDTYPE << "'\n";
+    if (std::strlen(LIBE3_STAMP_BUILDTYPE) == 0) {
+        std::cout << "[libe3] WARNING: libe3 was built with an EMPTY CMAKE_BUILD_TYPE,"
+                     " i.e. no -O flag.\n"
+                     "        The E3AP encoder, connector and outbound queue are"
+                     " unoptimised; latency\n"
+                     "        numbers from this build are not comparable with a"
+                     " Release one. Rebuild:\n"
+                     "          cmake -S libe3 -B libe3/build -DCMAKE_BUILD_TYPE=Release"
+                     " && cmake --build libe3/build -j\n"
+                     "          cmake --install libe3/build && cmake --build build"
+                     " --target e3_controller\n";
+    }
+
+    struct stat lib{}, self{};
+    if (::stat(LIBE3_STAMP_LIB, &lib) != 0) { return; }   // not installed there; nothing to compare
+    if (::stat("/proc/self/exe", &self) != 0) { return; }
+    if (lib.st_mtime > self.st_mtime) {
+        std::cout << "[libe3] WARNING: " << LIBE3_STAMP_LIB << " is NEWER than this"
+                     " binary.\n"
+                     "        libe3 was reinstalled after this controller was linked,"
+                     " so you are running\n"
+                     "        a STALE snapshot -- the reinstalled changes are NOT in"
+                     " this process. Relink:\n"
+                     "          cmake --build build --target e3_controller\n";
+    }
+}
+
 int main(int argc, char** argv)
 {
+    report_libe3_provenance();
+
     // Single argument by design; see print_usage.
     std::string config_path;
     for (int i = 1; i < argc; ++i) {

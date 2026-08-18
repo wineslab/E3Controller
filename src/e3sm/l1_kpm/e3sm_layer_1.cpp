@@ -493,7 +493,8 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     if (!stats_log_.is_open()) {
         stats_log_.open(stats_log_path_, std::ios::out | std::ios::trunc);
         stats_log_ << "slot_seq,"
-                      "gnb_to_codelet_us,codelet_to_dispatch_us,dispatch_to_handler_us,"
+                      "gnb_to_codelet_us,codelet_publish_us,"
+                      "codelet_to_dispatch_us,dispatch_to_handler_us,"
                       "shm_ns,encode_ns,emit_ns,nof_subc,iq_bytes\n";
     }
     auto ns_between = [](auto a, auto b) {
@@ -505,8 +506,11 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     auto sat_us = [](uint64_t lhs, uint64_t rhs) -> uint64_t {
         return (lhs > rhs) ? ((lhs - rhs) / 1000ULL) : 0ULL;
     };
+    const uint64_t publish_us =
+        (s.bytes_written > 0) ? sat_us(s.codelet_ts_ns, s.codelet_entry_ts_ns) : 0ULL;
     stats_log_ << publish_seq << ','
-               << sat_us(s.codelet_ts_ns,  s.gnb_ts_ns)      << ','
+               << sat_us(s.codelet_entry_ts_ns, s.gnb_ts_ns) << ','
+               << publish_us                                 << ','
                << sat_us(s.dispatch_ts_ns, s.codelet_ts_ns)  << ','
                << sat_us(handler_entry_ns, s.dispatch_ts_ns) << ','
                << ns_between(t_shm_start,  t_shm_end)        << ','

@@ -129,7 +129,27 @@ struct e3_slot_desc {
      * immediately before the hook fires. RAN anchor for end-to-end latency. */
     uint64_t gnb_ts_ns;
 
-    /* jbpf_time_get_ns() just before submit; same clock, subtracts cleanly. */
+    /* jbpf_time_get_ns() as the FIRST statement of jbpf_main, before any
+     * control-input handling or publishing.
+     *
+     *   codelet_entry_ts_ns - gnb_ts_ns = ocudu hook -> codelet entry, i.e.
+     *   ubpf JIT dispatch and jbpf plumbing ONLY. */
+    uint64_t codelet_entry_ts_ns;
+
+    /* jbpf_time_get_ns() just before submit; same clock, subtracts cleanly.
+     *
+     *   codelet_ts_ns - codelet_entry_ts_ns = the codelet's own execution. In
+     *   `writer: gnb` that is dominated by jbpf_e3_publish_slot(): the
+     *   cbf16 -> fp16 convert of the whole grid plus the row write into
+     *   /e3_ran_buffers, ~700 KiB read and ~700 KiB written per slot. It is
+     *   memory-bandwidth-bound and is the larger half by a wide margin.
+     *
+     * These were one field. It was documented as "codelet entry" but stamped at
+     * the end, so when `writer: gnb` moved the data plane into the codelet the
+     * convert silently folded into what the CSV reported as hook->codelet
+     * delivery. Splitting them is what makes gnb_to_codelet_us comparable with a
+     * `writer: controller` run, and with published figures that report delivery
+     * and shared-memory transfer as separate contributions. */
     uint64_t codelet_ts_ns;
 
     /* Bytes the helper wrote into the row. 0 with E3_SLOT_FLAG_TRUNCATED set

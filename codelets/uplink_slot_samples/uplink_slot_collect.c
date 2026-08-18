@@ -88,6 +88,11 @@ jbpf_main(void* state)
     struct jbpf_ran_slot_ctx* ctx = (struct jbpf_ran_slot_ctx*)state;
     int zero = 0;
 
+    /* FIRST statement: everything after this belongs to the codelet, not to
+     * jbpf delivery. Paired with the exit stamp further down; see the comment on
+     * codelet_entry_ts_ns in uplink_slot_data.h for why the two are split. */
+    uint64_t entry_ts_ns = jbpf_time_get_ns();
+
     /* Region config: forwarded straight to the helper, which attaches lazily.
      * The E3Controller owns /e3_ran_buffers; the gNB only ever attaches, so no
      * duplicate shm configuration lives on the RAN side. */
@@ -217,7 +222,8 @@ jbpf_main(void* state)
 
     /* Stamped last so the controller's codelet_to_dispatch measurement reflects
      * only the dispatcher's pickup latency. */
-    out->codelet_ts_ns = jbpf_time_get_ns();
+    out->codelet_entry_ts_ns = entry_ts_ns;
+    out->codelet_ts_ns       = jbpf_time_get_ns();
 
     if (jbpf_send_output(&output_map) < 0) {
         return JBPF_CODELET_FAILURE;

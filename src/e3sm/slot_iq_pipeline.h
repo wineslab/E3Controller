@@ -100,9 +100,13 @@ struct SlotSample {
      * RAN -> dApp end-to-end latency. */
     uint64_t gnb_ts_ns{0};
 
-    /* Codelet-entry timestamp (CLOCK_REALTIME ns). Subtract gnb_ts_ns
-     * to get the jbpf invocation overhead. Used by the SM to log the
-     * gnb_to_codelet stage in statistics_layer1.log. */
+    /* Codelet ENTRY timestamp (CLOCK_MONOTONIC ns). Subtract gnb_ts_ns for the
+     * jbpf invocation overhead alone -- this is what gnb_to_codelet_us reports. */
+    uint64_t codelet_entry_ts_ns{0};
+
+    /* Codelet EXIT timestamp. (codelet_ts_ns - codelet_entry_ts_ns) is the
+     * codelet's own execution; in `writer: gnb` that is the convert + row write,
+     * reported as codelet_publish_us. Also the base for codelet_to_dispatch. */
     uint64_t codelet_ts_ns{0};
 
     /* Controller-side timestamps captured when the slot arrived at

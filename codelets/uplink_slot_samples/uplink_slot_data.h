@@ -44,9 +44,13 @@ struct uplink_slot_sample {
      * jbpf_time_get_ns() so codelet_ts_ns below subtracts cleanly. */
     uint64_t gnb_ts_ns;
 
-    /* Codelet entry timestamp (jbpf_time_get_ns(), CLOCK_REALTIME ns).
-     * Subtract gnb_ts_ns to get the ocudu hook -> codelet entry latency
-     * (jbpf invocation + verifier path overhead). */
+    /* NOTE: the descriptor path (`writer: gnb`) does not use this struct; it
+     * publishes struct e3_slot_desc, which carries the entry/exit split. This
+     * legacy full-IQ struct keeps a single stamp.
+     *
+     * Codelet entry timestamp (jbpf_time_get_ns(), CLOCK_MONOTONIC ns --
+     * see jbpf_patches/jbpf_monotonic_time.patch). Subtract gnb_ts_ns for the
+     * ocudu hook -> codelet latency. */
     uint64_t codelet_ts_ns;
 
     /* 3GPP slot identification (parsed by the ocudu hook). */

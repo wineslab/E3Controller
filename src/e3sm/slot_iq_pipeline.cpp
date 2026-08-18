@@ -370,6 +370,7 @@ void SlotIqPipeline::dispatch_sample(const QueueEntry& entry) {
     sample.flags           = s.flags;
 
     sample.gnb_ts_ns       = s.gnb_ts_ns;
+    sample.codelet_entry_ts_ns = s.codelet_entry_ts_ns;
     sample.codelet_ts_ns   = s.codelet_ts_ns;
     sample.dispatch_ts_ns  = entry.dispatch_ts_ns;
     sample.recv_us         = entry.recv_us;
