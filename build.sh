@@ -17,21 +17,33 @@
 #      then build + INSTALL to /usr/local (both encoders -> runtime --encoding)
 #   4. build the E3Controller (jbpf is built in-tree via add_subdirectory)
 #
-# Usage: ./build.sh [--install-deps]
+# Usage: ./build.sh [--install-deps] [--latrec]
 #   --install-deps   Install all system packages before building. Debian/Ubuntu
 #                    only (uses apt-get). Uses sudo if not already root.
+#   --latrec         Build libe3 with -DLIBE3_ENABLE_LATREC=ON, so the stage
+#                    recorder is compiled in. Off by default: a normal build has
+#                    no recorder in the process and the controller's own stamps
+#                    compile to nothing. LIBE3_ENABLE_LATREC is a PUBLIC compile
+#                    definition on libe3::libe3, so this one flag reaches the
+#                    controller too -- there is nothing to pass twice, and a
+#                    mismatch is a link error rather than a silently untraced
+#                    build. Set LATREC_DEFAULT_DIR=<path> alongside it to move
+#                    the compiled-in default ring directory off /tmp/latrec.
 #
 # Override parallelism with JOBS=<n> ./build.sh.
+# Extra configure flags for the controller: E3C_CMAKE_ARGS='-DUSE_NATIVE=OFF'.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 INSTALL_DEPS=0
+ENABLE_LATREC=0
 for arg in "$@"; do
   case "$arg" in
     --install-deps|-d) INSTALL_DEPS=1 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    --latrec) ENABLE_LATREC=1 ;;
+    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     *) echo "ERROR: unknown argument '$arg'" >&2
-       echo "Usage: $0 [--install-deps]" >&2
+       echo "Usage: $0 [--install-deps] [--latrec]" >&2
        exit 2 ;;
   esac
 done
@@ -156,31 +168,34 @@ echo "==> [3/4] Building + installing libe3 (ASN.1 + JSON) to /usr/local"
 # Overridable for a debug build:  LIBE3_BUILD_TYPE=RelWithDebInfo ./build.sh
 LIBE3_BUILD_TYPE="${LIBE3_BUILD_TYPE:-Release}"
 echo "    libe3 CMAKE_BUILD_TYPE=${LIBE3_BUILD_TYPE}"
-cmake -S libe3 -B libe3/build -DCMAKE_BUILD_TYPE="${LIBE3_BUILD_TYPE}" \
-      -DLIBE3_ENABLE_ASN1=ON -DLIBE3_ENABLE_JSON=ON \
-      -DLIBE3_BUILD_EXAMPLES=OFF -DLIBE3_BUILD_TESTS=OFF
-
-# --- toolchain shim: supply BOOLEAN.* to libe3's E3AP runtime --------------
-# libe3 0.0.4's messages/asn1/V1/e3ap-1.0.0.cmake hard-lists BOOLEAN.{c,h} and
-# BOOLEAN_{aper,print,rfill,uper,xer}.c as asn1c outputs, but its E3AP grammar
-# never uses BOOLEAN, so the mouse07410 asn1c fork does NOT emit them and the
-# build fails on the missing sources. Rather than patch libe3, drop asn1c's own
-# BOOLEAN skeletons into libe3's generated dir before the build (asn1c won't
-# overwrite them). libe3 then owns asn_DEF_BOOLEAN; E3Controller links it
-# instead of compiling its own (see src/e3sm/asn/CMakeLists.txt). Re-run this
-# script after a clean (rm -rf libe3/build) so the copy is re-staged.
-BOOLEAN_FILES="BOOLEAN.c BOOLEAN.h BOOLEAN_aper.c BOOLEAN_print.c BOOLEAN_rfill.c BOOLEAN_uper.c BOOLEAN_xer.c"
-SKEL="${ASN1C_SKELETON_DIR:-}"
-if [ -z "${SKEL}" ]; then
-  for d in /opt/asn1c/share/asn1c /usr/local/share/asn1c /usr/share/asn1c; do
-    [ -f "$d/BOOLEAN.c" ] && { SKEL="$d"; break; }
-  done
+LIBE3_CMAKE_ARGS=(
+  -DCMAKE_BUILD_TYPE="${LIBE3_BUILD_TYPE}"
+  -DLIBE3_ENABLE_ASN1=ON
+  -DLIBE3_ENABLE_JSON=ON
+  -DLIBE3_BUILD_EXAMPLES=OFF
+  -DLIBE3_BUILD_TESTS=OFF
+)
+if [ "$ENABLE_LATREC" -eq 1 ]; then
+  echo "    latrec: ON (stage recorder compiled in)"
+  LIBE3_CMAKE_ARGS+=( -DLIBE3_ENABLE_LATREC=ON )
+  # libe3 only defaults LATREC_DEFAULT_DIR into its build tree when it is
+  # building its own tests, which we turn off -- so without this the compiled-in
+  # default stays latrec.h's /tmp/latrec. Pass it through when the caller names
+  # one; logging.latrec_dir in the YAML overrides it per run either way.
+  if [ -n "${LATREC_DEFAULT_DIR:-}" ]; then
+    echo "    latrec: default ring directory ${LATREC_DEFAULT_DIR}"
+    LIBE3_CMAKE_ARGS+=( "-DLATREC_DEFAULT_DIR=${LATREC_DEFAULT_DIR}" )
+  fi
 fi
-[ -n "${SKEL}" ] || { echo "ERROR: asn1c BOOLEAN skeletons not found; set ASN1C_SKELETON_DIR=<dir with BOOLEAN.c>"; exit 1; }
-echo "    supplying BOOLEAN skeletons from ${SKEL} -> libe3/build/messages"
-mkdir -p libe3/build/messages
-for f in ${BOOLEAN_FILES}; do cp "${SKEL}/${f}" libe3/build/messages/; done
-# ---------------------------------------------------------------------------
+cmake -S libe3 -B libe3/build "${LIBE3_CMAKE_ARGS[@]}"
+
+# No BOOLEAN.* skeleton staging here. It existed because Spectrum-ConfigControl
+# used BOOLEAN while libe3's E3AP grammar did not, so asn1c never emitted the
+# skeleton on libe3's side and we staged it there to have libe3 compile it for
+# us. Spectrum-ConfigControl is no longer compiled (src/e3sm/asn/CMakeLists.txt)
+# and nothing references asn_DEF_BOOLEAN, so the staging had nothing left to
+# supply -- while still aborting the build outright on any host without asn1c's
+# reference skeletons on disk.
 
 cmake --build libe3/build -j"${JOBS}"
 $SUDO cmake --install libe3/build
@@ -189,7 +204,12 @@ $SUDO cmake --install libe3/build
 # Step 4: E3Controller
 # ---------------------------------------------------------------------------
 echo "==> [4/4] Building E3Controller"
-cmake -S . -B build -DINITIALIZE_SUBMODULES=OFF
-cmake --build build -j"${JOBS}" --target e3_controller
+# E3C_CMAKE_ARGS lets a caller add configure flags without editing this script.
+# CI sets -DUSE_NATIVE=OFF: -march=native is right on a deployment host but wrong
+# for a measurement run on whatever CPU a shared runner happens to be, since it
+# makes numbers incomparable between runs.
+# shellcheck disable=SC2086
+cmake -S . -B build -DINITIALIZE_SUBMODULES=OFF ${E3C_CMAKE_ARGS:-}
+cmake --build build -j"${JOBS}" --target e3_controller bench_stage_recording
 
 echo "==> Done: $(pwd)/out/bin/e3_controller"

@@ -7,6 +7,8 @@
 
 #include "slot_iq_pipeline.h"
 
+#include "e3sm/l1_kpm/l1_kpm_trace.h"
+
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -324,6 +326,14 @@ void SlotIqPipeline::process_buffers(struct jbpf_io_stream_id* /*stream_id*/,
 }
 
 void SlotIqPipeline::worker_loop() {
+    /* Open this thread's stage-record ring before the loop, not inside it: the
+     * call faults in the whole mapping, and it has to happen before the first
+     * indication is emitted or libe3 would open the ring first under its own
+     * name and every record we stamp would be attributed to the library
+     * instead of to this component. Idempotent, and a no-op in a build without
+     * the recorder compiled in. */
+    e3sm_l1kpm_trace::open_ring();
+
     while (running_.load(std::memory_order_acquire)) {
         const uint64_t tail = queue_tail_.load(std::memory_order_relaxed);
         const uint64_t head = queue_head_.load(std::memory_order_acquire);

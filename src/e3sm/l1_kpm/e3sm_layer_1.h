@@ -47,7 +47,7 @@ public:
           shm_name_(cfg.shm.name),
           shm_size_(cfg.shm.size_bytes),
           target_slot_(cfg.target_slot),
-          stats_log_path_(cfg.logging.stats_log_path),
+          drops_log_path_(cfg.logging.drops_log_path),
           geom_(cfg.radio),
           cbf16_scale_(cfg.shm.cbf16_scale),
           writer_mode_(cfg.shm.writer)
@@ -107,9 +107,13 @@ private:
     /* Bump a reason. Also drives the throttled live log line. */
     void note_drop(Drop d);
 
-    /* Append a cumulative row to <stats_log_path_ + "_drops">, at most once a
-     * second. Cumulative rather than per-interval so a row is meaningful on its
-     * own and a missed flush cannot lose events. No-op when stats logging is off. */
+    /* Append a cumulative row to drops_log_path_, at most once a second.
+     * Cumulative rather than per-interval so a row is meaningful on its own and
+     * a missed flush cannot lose events. No-op when the path is empty.
+     *
+     * This is the only file this SM writes. It is aggregate and throttled, so
+     * unlike the per-slot stage CSV it replaced it does no work on the slot
+     * path -- stage timing is latrec's job now, see l1_kpm_trace.h. */
     void maybe_log_drops();
 
     /* SlotIqPipeline consumer callback (worker thread). Receives one
@@ -126,8 +130,8 @@ private:
      * -1 disables. Superseded by workstream F's codelet-side slot_mask, which
      * makes the same decision before any data moves. */
     int         target_slot_;
-    /* Path for the per-slot stage CSV. Empty disables stats logging. */
-    std::string stats_log_path_;
+    /* Path for the throttled drop-accounting CSV. Empty disables it. */
+    std::string drops_log_path_;
 
     e3sm_spectrum::ShmIqWriter shm_writer_;
     bool                       running_{false};
@@ -154,15 +158,15 @@ private:
     /* One-shot: controller mode configured but the codelet only sends descriptors. */
     bool writer_mode_warned_{false};
 
-    /* Per-slot stats. slot_publish_seq_ increments for every slot
-     * we publish; counts indications emitted to dApps. stats_log_ is
-     * opened lazily on the first published slot when stats_log_path_
-     * is non-empty.
+    /* Increments for every slot that reaches the traced region, and keys that
+     * slot's stage records across the whole E3 path including libe3's own -- it
+     * is published to the library with latrec_ctx_set() before emitting and
+     * comes back as the outbound leg's origin_seq. Only meaningful within this
+     * ring; every producer numbers from 1.
      *
      * Atomic because the shutdown summary reads it from the main thread while
      * on_sample increments it on the worker. */
     std::atomic<uint64_t> slot_publish_seq_{0};
-    std::ofstream         stats_log_;
 
     /* Drop accounting -- see enum Drop. */
     std::atomic<uint64_t> drops_[kDropCount]{};

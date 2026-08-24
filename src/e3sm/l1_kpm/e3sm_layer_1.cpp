@@ -14,12 +14,14 @@
 
 #include "e3sm_layer1_wrapper.h"
 #include "e3sm_layer1_json.h"
+#include "l1_kpm_trace.h"
 
 #include <chrono>
 #include <cstdio>
-#include <ctime>
 #include <fstream>
 #include <sstream>
+
+namespace trace = e3sm_l1kpm_trace;
 
 /* ---------------------------------------------------------------------------
  * Drop accounting
@@ -86,26 +88,18 @@ void E3SMLayer1::maybe_log_drops() {
         static_cast<unsigned long>(total),
         static_cast<unsigned long>(published_slots()));
 
-    if (stats_log_path_.empty()) {
+    if (drops_log_path_.empty()) {
         return;  /* counters still maintained; only the CSV is opt-in */
     }
     if (!drops_log_.is_open()) {
-        /* Sibling of the stage CSV, same convention e3_controller.cpp uses for
-         * the Spectrum SM's path: insert the suffix before the extension. */
-        const std::size_t dot   = stats_log_path_.find_last_of('.');
-        const std::size_t slash = stats_log_path_.find_last_of('/');
-        const bool has_ext = (dot != std::string::npos &&
-                              (slash == std::string::npos || dot > slash));
-        const std::string path = has_ext
-            ? stats_log_path_.substr(0, dot) + "_drops" + stats_log_path_.substr(dot)
-            : stats_log_path_ + "_drops";
-        drops_log_.open(path, std::ios::out | std::ios::trunc);
+        drops_log_.open(drops_log_path_, std::ios::out | std::ios::trunc);
         if (!drops_log_.is_open()) {
-            std::fprintf(stderr, "[E3SMLayer1] cannot open drop log %s\n", path.c_str());
-            stats_log_path_.clear();   /* do not retry every second */
+            std::fprintf(stderr, "[E3SMLayer1] cannot open drop log %s\n",
+                         drops_log_path_.c_str());
+            drops_log_path_.clear();   /* do not retry every second */
             return;
         }
-        drops_log_ << "uptime_s,published,dropped_total";
+        drops_log_ << "uptime_s,published,dropped_total,latrec_clamped";
         for (std::size_t i = 0; i < kDropCount; ++i) {
             drops_log_ << ',' << drop_name(static_cast<Drop>(i));
         }
@@ -115,11 +109,15 @@ void E3SMLayer1::maybe_log_drops() {
 
     const double uptime_s =
         std::chrono::duration<double>(now - drops_log_start_).count();
-    drops_log_ << uptime_s << ',' << published_slots() << ',' << total;
+    drops_log_ << uptime_s << ',' << published_slots() << ',' << total
+               << ',' << trace::clamped();
     for (std::size_t i = 0; i < kDropCount; ++i) {
         drops_log_ << ',' << drops_[i].load(std::memory_order_relaxed);
     }
     drops_log_ << '\n';
+    /* Aggregate and throttled to <=1/s, so this flush is nowhere near the slot
+     * path -- unlike the per-slot stage CSV this replaced, which flushed once
+     * per slot from inside the handler. */
     drops_log_.flush();   /* a crash mid-run must not lose the accounting */
 }
 
@@ -129,6 +127,13 @@ std::string E3SMLayer1::drops_summary() const {
 
     std::ostringstream os;
     os << "[E3SMLayer1] slots published: " << pub << ", dropped: " << total;
+    /* Capture quality, not a drop: a non-zero count means the ring's ascending
+     * invariant had to be enforced on that many stamps, so A1 is understated
+     * for those slots. Worth seeing even on a run that dropped nothing. */
+    if (const uint64_t clamped = trace::clamped(); clamped != 0) {
+        os << "\n    latrec stamps clamped: " << clamped
+           << " (A1 understated for these; see l1_kpm_trace.h)";
+    }
     if (total == 0) {
         os << " (none)";
         return os.str();
@@ -337,24 +342,6 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
         }
     }
 
-    using clock = std::chrono::steady_clock;
-
-    // CLOCK_MONOTONIC ns at on_sample entry. Same domain as
-    // s.gnb_ts_ns / s.codelet_ts_ns / s.dispatch_ts_ns, so the four
-    // RAN-side stage durations subtract cleanly into statistics_layer1.log.
-    //
-    // Was CLOCK_REALTIME; the entire chain moved together. Monotonic matches
-    // latrec's clock (so stage rows and rings join without an offset) and cannot
-    // be stepped by NTP mid-run, which is what the saturating subtractions below
-    // were defending against.
-    auto realtime_ns_now = []() -> uint64_t {
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
-               static_cast<uint64_t>(ts.tv_nsec);
-    };
-    const uint64_t handler_entry_ns = realtime_ns_now();
-
     // Single encoding: one wire format for every subscriber.
     const libe3::EncodingFormat enc =
         agent_ ? agent_->config().encoding : libe3::EncodingFormat::ASN1;
@@ -362,29 +349,14 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     if (subs.empty()) {
         /* Counted, but NOT a fault: before the first dApp subscribes every slot
          * lands here, so a large no_subscribers count on a healthy run is
-         * normal and is exactly why the summary breaks reasons out. */
+         * normal and is exactly why the summary breaks reasons out.
+         *
+         * Checked before the first stage stamp deliberately: this is the SM's
+         * normal idle state, and stamping it would fill the ring with records
+         * for slots nobody asked for. */
         note_drop(Drop::NoSubscribers);
         return;  // No one is listening; nothing to publish.
     }
-
-    // Publish the slot to /e3_ran_buffers.
-    //
-    // In `writer: controller` mode this converts cbf16 -> fp16 inline (the dApp
-    // expects fp16 on the wire). In `writer: gnb` mode the gNB-side helper has
-    // already written the row in the PHY RX thread and reported which one, so we
-    // must NOT write here: both writers keep their own ring cursor and two active
-    // writers would silently overwrite each other. publish_row_cbf16 hard-refuses
-    // in that mode; we take the indices the RAN reported instead.
-    const auto t_shm_start = clock::now();
-    uint8_t  fh_buf_idx   = 0;
-    uint32_t fh_write_idx = 0;
-    if (shm_writer_.writes_rows()) {
-        shm_writer_.publish_row_cbf16(s.iq, ports_clamped, fh_buf_idx, fh_write_idx);
-    } else {
-        fh_buf_idx   = s.fh_buffer_index;
-        fh_write_idx = s.fh_write_index;
-    }
-    const auto t_shm_end = clock::now();
 
     // Absolute slot within a 10 ms frame (0..19 at 30 kHz SCS).
     //
@@ -400,10 +372,41 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     // 19 becomes 37 (both invalid).
     const uint16_t abs_slot = s.slot_id;
 
-    // Encode the slot once in the configured wire format. Encoder is
+    // Everything from here to emit_tail() is one row in the stage records.
+    // publish_seq keys it, including inside libe3 (see trace::bind_libe3).
+    const uint64_t publish_seq =
+        slot_publish_seq_.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    // A1: the data recording, replayed from the two boundaries the slot carries.
+    // Both stamps are back-dated to when they actually happened - the gNB, the
+    // codelet and the dispatcher all read CLOCK_MONOTONIC, which is latrec's own
+    // clock, so there is no conversion and no offset arithmetic.
+    trace::record_begin(publish_seq, s.sfn, abs_slot, s.gnb_ts_ns, s.codelet_entry_ts_ns);
+    trace::process_begin(publish_seq, s.codelet_ts_ns, s.dispatch_ts_ns,
+                         (s.bytes_written > 0) ? s.bytes_written : s.iq_size_bytes);
+
+    // Publish the slot to /e3_ran_buffers.
+    //
+    // In `writer: controller` mode this converts cbf16 -> fp16 inline (the dApp
+    // expects fp16 on the wire), and that cost lands inside A2. In `writer: gnb`
+    // mode the gNB-side helper has already written the row in the PHY RX thread
+    // and reported which one - that cost is inside A1 - so we must NOT write
+    // here: both writers keep their own ring cursor and two active writers would
+    // silently overwrite each other. publish_row_cbf16 hard-refuses in that mode;
+    // we take the indices the RAN reported instead.
+    uint8_t  fh_buf_idx   = 0;
+    uint32_t fh_write_idx = 0;
+    if (shm_writer_.writes_rows()) {
+        shm_writer_.publish_row_cbf16(s.iq, ports_clamped, fh_buf_idx, fh_write_idx);
+    } else {
+        fh_buf_idx   = s.fh_buffer_index;
+        fh_write_idx = s.fh_write_index;
+    }
+
+    // A3: encode the slot once in the configured wire format. Encoder is
     // O(small); we do it once per slot regardless of subscriber count.
     const bool want_json = (enc == libe3::EncodingFormat::JSON);
-    const auto t_encode_start = clock::now();
+    trace::encode_begin(publish_seq, s.iq_size_bytes);
     encoded_buf_.clear();
     const bool encoded_ok = want_json
         ? e3sm_layer1::encode_iq_indication_json(
@@ -412,21 +415,25 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
         : e3sm_layer1::encode_iq_indication_aper(
               s.gnb_ts_ns, s.sfn, abs_slot, shm_name_,
               fh_buf_idx, fh_write_idx, ports_clamped, encoded_buf_);
-    const uint64_t encode_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        clock::now() - t_encode_start).count();
 
     if (!encoded_ok) {
         std::fprintf(stderr,
             "[E3SMLayer1] Failed to %s-encode indication (buf=%u row=%u)\n",
             want_json ? "JSON" : "APER", fh_buf_idx, fh_write_idx);
+        trace::encode_failed(publish_seq);
         note_drop(Drop::EncodeFailed);
         return;
     }
+    trace::encode_done(publish_seq, encoded_buf_.size());
 
-    // Fan out one indication per subscriber. emit_ns here captures the
-    // SM-side enqueue cost (PDU build + emit_outbound); the encode + ZMQ
-    // send stages happen downstream in libe3's RAN outbound loop.
-    const auto t_emit_start = clock::now();
+    // Hand off to libe3. Publishing publish_seq first is what lets the library's
+    // own records - E3AP encode, queuing, the connector send - be attributed back
+    // to this slot: libe3 stamps it into EMIT_ENTER's aux, which surfaces offline
+    // as the outbound leg's origin_seq. Everything downstream of here is the
+    // library's box, measured in the library; we do not re-time it.
+    trace::bind_libe3(publish_seq);
+
+    // Fan out one indication per subscriber.
     for (uint32_t dapp_id : subs) {
         libe3::Pdu pdu = make_indication_pdu(dapp_id, RAN_FUNCTION_ID,
                                              encoded_buf_);
@@ -443,80 +450,7 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
             note_drop(Drop::EmitFailed);
         }
     }
-    const auto t_emit_end = clock::now();
 
-    // --- Per-slot statistics (disabled unless --stats-log was given) ---
-    const uint64_t publish_seq =
-        slot_publish_seq_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (stats_log_path_.empty()) {
-        return;
-    }
-    // Schema:
-    //   slot_seq,
-    //   gnb_to_codelet_us,     NOT "hook -> codelet entry". This is
-    //                          hook -> END of the codelet, and in `writer: gnb`
-    //                          mode that INCLUDES the whole data plane:
-    //
-    //                            gnb_ts_ns    clock_gettime(CLOCK_MONOTONIC) taken
-    //                                         immediately before the hook fires, on
-    //                                         the last symbol of the slot, i.e. when
-    //                                         the resource grid is complete
-    //                                         (upper_phy_rx_symbol_handler_impl.cpp:73)
-    //                            ...          ubpf JIT dispatch + the codelet's
-    //                                         bounds-check ladder
-    //                            ...          jbpf_e3_publish_slot(): the bf16 -> fp16
-    //                                         AVX2/F16C convert AND the full
-    //                                         733,824-byte row write into
-    //                                         /e3_ran_buffers
-    //                            codelet_ts_ns  jbpf_time_get_ns() at the END of the
-    //                                         codelet (uplink_slot_collect.c:220,
-    //                                         after the publish call at :174-180)
-    //
-    //                          So read this column as "gNB hook -> the IQ is in
-    //                          shared memory", not as jbpf invocation overhead.
-    //                          Sanity check: the standalone convert benchmarks at
-    //                          66.5 us for a 4-port slot against a measured p50 of
-    //                          ~71 us, so the copy is ~94% of this stage and jbpf
-    //                          dispatch is only the remaining ~4-5 us.
-    //   codelet_to_dispatch_us,codelet -> controller dispatcher poll
-    //   dispatch_to_handler_us,dispatcher -> on_sample (SPSC queue wait)
-    //   shm_ns,                publish_row_cbf16 cost
-    //   encode_ns,             SM payload encoder cost
-    //   emit_ns,               emit_outbound fan-out (SM-side enqueue) cost
-    //   nof_subc, iq_bytes     slot size (handy if BWP changes)
-    //
-    // The three "us" stages are derived from RAN-side CLOCK_MONOTONIC ns
-    // stamps (gNB -> codelet -> dispatcher -> handler). Because that is also
-    // latrec's clock, these absolute stamps and the latrec rings can be joined
-    // directly -- no mono/real offset arithmetic. The post-encode ZMQ-send stage
-    // lives in libe3's outbound latrec leg (L0..L3).
-    if (!stats_log_.is_open()) {
-        stats_log_.open(stats_log_path_, std::ios::out | std::ios::trunc);
-        stats_log_ << "slot_seq,"
-                      "gnb_to_codelet_us,codelet_publish_us,"
-                      "codelet_to_dispatch_us,dispatch_to_handler_us,"
-                      "shm_ns,encode_ns,emit_ns,nof_subc,iq_bytes\n";
-    }
-    auto ns_between = [](auto a, auto b) {
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count();
-    };
-    // Saturating subtractions: the three RAN-side stages are derived
-    // from absolute realtime stamps. In the (rare) clock-warp case
-    // they could go negative — clamp to 0 so the CSV row stays parseable.
-    auto sat_us = [](uint64_t lhs, uint64_t rhs) -> uint64_t {
-        return (lhs > rhs) ? ((lhs - rhs) / 1000ULL) : 0ULL;
-    };
-    const uint64_t publish_us =
-        (s.bytes_written > 0) ? sat_us(s.codelet_ts_ns, s.codelet_entry_ts_ns) : 0ULL;
-    stats_log_ << publish_seq << ','
-               << sat_us(s.codelet_entry_ts_ns, s.gnb_ts_ns) << ','
-               << publish_us                                 << ','
-               << sat_us(s.dispatch_ts_ns, s.codelet_ts_ns)  << ','
-               << sat_us(handler_entry_ns, s.dispatch_ts_ns) << ','
-               << ns_between(t_shm_start,  t_shm_end)        << ','
-               << encode_ns                                  << ','
-               << ns_between(t_emit_start, t_emit_end)       << ','
-               << s.nof_subcarriers                          << ','
-               << s.iq_size_bytes                            << '\n';
-    stats_log_.flush();
+    // The emit tail, over all subscribers.
+    trace::emit_tail(publish_seq, subs.size());
 }

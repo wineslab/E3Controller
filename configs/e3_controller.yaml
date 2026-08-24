@@ -174,23 +174,33 @@ threads:
   poll_interval_us: 100
 
 logging:
-  # Per-slot RAN-side stage CSV (gnb -> codelet -> dispatch -> handler, plus
-  # shm/encode/emit costs). Empty disables it.
+  # Throttled drop-accounting CSV. Empty disables it.
   #
-  # Setting this also enables the DROP CSV, written alongside as
-  # <path minus extension>_drops<extension> -- here /tmp/e3c_stages_drops.csv.
-  # It carries one cumulative row per second: published, dropped_total, and a
-  # column per reason (no_subscribers, ran_published_nothing, blob_too_small,
-  # ...). The drop COUNTERS themselves are always on: the throttled live stderr
-  # line and the shutdown summary do not depend on this path.
-  stats_log_path: "/tmp/e3c_stages.csv"
+  # One cumulative row per second: uptime, published, dropped_total,
+  # latrec_clamped, and a column per drop reason (no_subscribers,
+  # ran_published_nothing, blob_too_small, ...). The drop COUNTERS themselves are
+  # always on: the throttled live stderr line and the shutdown summary do not
+  # depend on this path.
+  #
+  # This is the only file the L1-KPM SM writes. The per-slot stage CSV that used
+  # to live here is gone: it opened an ofstream, wrote a row and flushed it once
+  # per slot inside the sample handler, so the numbers it produced included the
+  # cost of producing them. Stage timing is latrec's job now.
+  drops_log_path: "/tmp/e3c_drops.csv"
 
-# ---------------------------------------------------------------------------
-# Legacy controller-side single-slot filter: slot index within a 10 ms frame
-# (0..slots_per_frame()-1). -1 disables.
-#
-# Note this drops the slot AFTER the RAN has already converted and published it,
-# so it saves the controller work and the RAN nothing. Workstream F's
-# codelet-side slot_mask supersedes it by deciding before any data moves.
-# ---------------------------------------------------------------------------
+  # Per-slot stage CSV for the LEGACY eCPRI SM (RF=1) only. Empty disables it.
+  spectrum_stats_log_path: ""
+
+  # Where latrec writes its per-thread stage-record rings.
+  #
+  # PLACEMENT ONLY, not a switch. Whether anything is recorded at all is decided
+  # when libe3 is built, by -DLIBE3_ENABLE_LATREC (./build.sh --latrec); a normal
+  # build has no recorder in the process and ignores this. Empty leaves libe3's
+  # compiled-in default (/tmp/latrec unless the build overrode it).
+  #
+  # Rings default to 2^18 records, 8 MiB per thread. The slot path writes five
+  # records per published slot, so at 2000 slots/s that is ~26 s before the ring
+  # wraps -- and a wrapped capture is not a valid measurement. Raise it with
+  # LATREC_ENTRIES_LOG2_E3CONTROLLER_L1_KPM=24 (512 MiB, ~28 min); ceiling 2^28.
+  latrec_dir: ""
 target_slot: -1

@@ -125,8 +125,12 @@ struct e3_shm_cfg {
  * MiB to a couple of KiB and stops being a per-config sizing problem.
  */
 struct e3_slot_desc {
-    /* gNB hand-off timestamp (CLOCK_REALTIME ns), stamped by the hook caller
-     * immediately before the hook fires. RAN anchor for end-to-end latency. */
+    /* A1 entry: gNB hand-off timestamp, stamped by the hook caller immediately
+     * before the hook fires - on the last symbol, grid complete, before
+     * anything has been copied. RAN anchor for end-to-end latency.
+     *
+     * CLOCK_MONOTONIC ns, matching jbpf_time_get_ns() (patched) and the
+     * controller's dispatcher poll, so all three subtract cleanly. */
     uint64_t gnb_ts_ns;
 
     /* jbpf_time_get_ns() as the FIRST statement of jbpf_main, before any

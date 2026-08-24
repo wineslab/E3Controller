@@ -146,7 +146,28 @@ struct ThreadConfig {
 };
 
 struct LoggingConfig {
-    std::string stats_log_path;
+    /* Throttled drop-accounting CSV (<=1 row/s, cumulative). Empty disables it.
+     * This is the only file the L1-KPM SM writes; per-slot stage timing is
+     * latrec's job -- see src/e3sm/l1_kpm/l1_kpm_trace.h. */
+    std::string drops_log_path;
+
+    /* Per-slot stage CSV for the LEGACY eCPRI Service Model (RF=1) only.
+     * Empty disables it.
+     *
+     * The slot-path SM (RF=2) no longer has one -- see latrec_dir below. This
+     * one is left as it was: it is on a different data path, and it has the same
+     * per-slot-flush problem, so it should get the same treatment when that path
+     * is next touched. */
+    std::string spectrum_stats_log_path;
+
+    /* Where latrec writes its per-thread stage-record rings. Empty leaves the
+     * directory compiled into libe3 (LATREC_DEFAULT_DIR, /tmp/latrec unless the
+     * build overrode it).
+     *
+     * Placement only, NOT a switch: whether anything is recorded is decided
+     * when libe3 is built, by -DLIBE3_ENABLE_LATREC (./build.sh --latrec). A
+     * build without it ignores this entirely. */
+    std::string latrec_dir;
 };
 
 struct ControllerConfig {
