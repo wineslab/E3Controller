@@ -4,6 +4,8 @@
 
 #include "e3_config.h"
 
+#include <libe3/latrec.h>
+
 #include <cstdio>
 #include <set>
 #include <sstream>
@@ -279,10 +281,13 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
 
         /* ---- logging ---- */
         if (const auto n = root["logging"]) {
-            if (!check_keys(n, "logging", {"stats_log_path"}, err)) {
+            if (!check_keys(n, "logging",
+                            {"drops_log_path", "spectrum_stats_log_path", "latrec_dir"}, err)) {
                 return false;
             }
-            get(n, "stats_log_path", out.logging.stats_log_path);
+            get(n, "drops_log_path", out.logging.drops_log_path);
+            get(n, "spectrum_stats_log_path", out.logging.spectrum_stats_log_path);
+            get(n, "latrec_dir", out.logging.latrec_dir);
         }
 
         get(root, "target_slot", out.target_slot);
@@ -353,9 +358,26 @@ print_config(const ControllerConfig& cfg)
     if (cfg.target_slot >= 0) {
         std::printf("  target_slot: %d (controller-side filter)\n", cfg.target_slot);
     }
-    if (!cfg.logging.stats_log_path.empty()) {
-        std::printf("  stats log:  %s\n", cfg.logging.stats_log_path.c_str());
+    if (!cfg.logging.drops_log_path.empty()) {
+        std::printf("  drop log:   %s\n", cfg.logging.drops_log_path.c_str());
     }
+    /* Three distinguishable states, worth telling apart on startup: not
+     * compiled in, compiled in and writing where libe3 was built to write, or
+     * compiled in and redirected. Otherwise "I set latrec_dir and got no rings"
+     * is indistinguishable from a wrong path. */
+#ifdef LIBE3_ENABLE_LATREC
+    std::printf("  stage recs: enabled -> %s\n",
+                cfg.logging.latrec_dir.empty()
+                    ? LATREC_DEFAULT_DIR " (libe3 default)"
+                    : cfg.logging.latrec_dir.c_str());
+#else
+    if (!cfg.logging.latrec_dir.empty()) {
+        std::printf("  stage recs: IGNORED (%s): libe3 built without "
+                    "-DLIBE3_ENABLE_LATREC\n", cfg.logging.latrec_dir.c_str());
+    } else {
+        std::printf("  stage recs: not compiled in\n");
+    }
+#endif
 }
 
 bool

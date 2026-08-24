@@ -36,21 +36,36 @@
  * 4 ports * 14 symbols * 3276 subc * 4 bytes = 733824. */
 #define MAX_SLOT_IQ_BYTES 733824
 
+/* LEGACY. The codelet publishes struct e3_slot_desc (codelets/include/
+ * jbpf_e3_slot_api.h), not this. Nothing writes this struct any more; the
+ * header survives for MAX_SLOT_IQ_BYTES. Kept as the record of the full-IQ
+ * wire format.
+ */
 struct uplink_slot_sample {
-    /* gNB-side hand-off timestamp (CLOCK_REALTIME ns) captured by the
-     * ocudu hook caller, right before the hook fires. This is the RAN
-     * anchor for end-to-end latency; the dApp subtracts its own
-     * CLOCK_REALTIME receipt time from it. Same clock domain as
-     * jbpf_time_get_ns() so codelet_ts_ns below subtracts cleanly. */
+    /* A1 entry: the gNB hook caller stamps this immediately before the hook
+     * fires, on the LAST symbol of the slot, gated on is_valid - so the
+     * resource grid is complete and nothing has been copied yet. The gNB hands
+     * the codelet the grid's raw storage pointer and never memcpys it, so this
+     * is the true "data exists, nothing has moved" instant.
+     *
+     * CLOCK_MONOTONIC ns. (The gNB moved off CLOCK_REALTIME; the codelet's
+     * jbpf_time_get_ns() follows via jbpf_patches/jbpf_monotonic_time.patch,
+     * and so does the controller's dispatcher poll. All three have to agree or
+     * the subtractions below silently mix epochs.) */
     uint64_t gnb_ts_ns;
 
-    /* NOTE: the descriptor path (`writer: gnb`) does not use this struct; it
-     * publishes struct e3_slot_desc, which carries the entry/exit split. This
-     * legacy full-IQ struct keeps a single stamp.
+    /* A1 exit / A2 entry, stamped LAST - just before jbpf_send_output(), after
+     * the codelet has finished moving the slot's data. Same clock as above.
      *
-     * Codelet entry timestamp (jbpf_time_get_ns(), CLOCK_MONOTONIC ns --
-     * see jbpf_patches/jbpf_monotonic_time.patch). Subtract gnb_ts_ns for the
-     * ocudu hook -> codelet latency. */
+     *   codelet_ts_ns - gnb_ts_ns = A1, the data recording itself.
+     *
+     * This is emphatically NOT "hook -> codelet entry latency", and the cost it
+     * covers is not jbpf plumbing: dispatch is a few microseconds and the data
+     * movement is tens. Nor is there any verifier cost in it - the gNB loads
+     * through ubpf, whose JIT emits no bounds checks, and verification is an
+     * offline build-time gate (see codelets/Makefile). The descriptor path
+     * splits this into codelet_entry_ts_ns and codelet_ts_ns for exactly that
+     * reason; this legacy struct keeps the single stamp. */
     uint64_t codelet_ts_ns;
 
     /* 3GPP slot identification (parsed by the ocudu hook). */

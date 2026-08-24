@@ -232,3 +232,27 @@ target_link_libraries(e3_controller PRIVATE
 set_target_properties(e3_controller PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${OUTPUT_DIR}/bin"
 )
+
+# ---- Recording-cost bench ----
+# Prices the stage recorder that replaced the per-slot stats CSV. Deliberately
+# minimal: it links the same trace header the slot handler uses and nothing
+# else -- no jbpf, no Service Model, no shared-memory writer, no encoders. That
+# is enough to measure the recording mechanism, and it keeps the target
+# buildable (and CI-runnable) with no RAN attached.
+#
+# There is no "real slot work" arm to link for: under the default
+# shm.writer: gnb the gNB converts and writes the row itself, so the controller
+# moves no slot data at all. See bench/bench_stage_recording.cpp.
+option(E3C_BUILD_BENCH "Build the stage-recording cost bench" ON)
+
+if(E3C_BUILD_BENCH)
+  add_executable(bench_stage_recording bench/bench_stage_recording.cpp)
+  target_include_directories(bench_stage_recording PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+  )
+  target_link_libraries(bench_stage_recording PRIVATE libe3::libe3 pthread rt)
+  set_target_properties(bench_stage_recording PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${OUTPUT_DIR}/bin"
+  )
+endif()
