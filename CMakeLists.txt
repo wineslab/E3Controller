@@ -153,6 +153,36 @@ FetchContent_MakeAvailable(yaml_cpp)
 #   cmake --build libe3/build -j && sudo cmake --install libe3/build
 find_package(libe3 REQUIRED)
 
+# ---- libe3 staleness stamp ----
+#
+# libe3::libe3 is STATIC IMPORTED (see /usr/local/lib/cmake/libe3/libe3Targets.cmake),
+# so this binary carries a SNAPSHOT of liblibe3.a taken at link time. Reinstalling
+# libe3 afterwards changes nothing until the controller is relinked, and there is
+# no runtime symptom: a changed SLEEP_DURATION or E3AP encoder is simply absent.
+# Record what we linked against so the binary can say so on startup and warn when
+# /usr/local has moved on. Costs one stat() at boot.
+get_filename_component(LIBE3_PREFIX "${libe3_DIR}/../../.." ABSOLUTE)
+set(LIBE3_STAMP_LIB       "${LIBE3_PREFIX}/lib/liblibe3.a")
+set(LIBE3_STAMP_VERSION   "${libe3_VERSION}")
+set(LIBE3_STAMP_BUILDTYPE "${CMAKE_BUILD_TYPE}")
+
+# Bake the queue's poll period: it is the value most often changed by hand and
+# the one whose staleness is least visible (it only shows up as a shifted
+# outbound queue-wait distribution).
+set(LIBE3_STAMP_SLEEP_US "unknown")
+if(EXISTS "${LIBE3_PREFIX}/include/libe3/lockfree_queue.hpp")
+  file(STRINGS "${LIBE3_PREFIX}/include/libe3/lockfree_queue.hpp"
+       _libe3_sleep_line REGEX "SLEEP_DURATION[ \t]*=")
+  string(REGEX MATCH "microseconds\\(([0-9]+)\\)" _m "${_libe3_sleep_line}")
+  if(CMAKE_MATCH_1)
+    set(LIBE3_STAMP_SLEEP_US "${CMAKE_MATCH_1}")
+  endif()
+endif()
+message(STATUS "libe3: ${LIBE3_STAMP_VERSION} from ${LIBE3_PREFIX} "
+               "(static, SLEEP_DURATION=${LIBE3_STAMP_SLEEP_US}us)")
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/libe3_stamp.h.in"
+               "${CMAKE_BINARY_DIR}/generated/libe3_stamp.h" @ONLY)
+
 # ---- E3Controller executable ----
 add_executable(e3_controller
   src/e3_controller.cpp
@@ -175,6 +205,7 @@ add_executable(e3_controller
 
 # Include paths: our own headers + jbpf headers
 target_include_directories(e3_controller PRIVATE
+  ${CMAKE_BINARY_DIR}/generated        # libe3_stamp.h
   ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/jbpf/src/io

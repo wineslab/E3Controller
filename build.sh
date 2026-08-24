@@ -141,7 +141,23 @@ bash ./apply_jbpf_patches.sh
 echo "==> [3/4] Building + installing libe3 (ASN.1 + JSON) to /usr/local"
 # JSON encoding needs nlohmann_json >= 3.11 on the system (libe3's floor); install
 # it (header-only) or let libe3's FetchContent fetch it when the host has internet.
-cmake -S libe3 -B libe3/build -DLIBE3_ENABLE_ASN1=ON -DLIBE3_ENABLE_JSON=ON \
+#
+# CMAKE_BUILD_TYPE is NOT optional. libe3's own CMakeLists never defaults it, and
+# this line used to omit it, so libe3 compiled with NO -O flag at all:
+#
+#   CXX_FLAGS = -fPIC -Wall -Wextra ... -std=c++17      # and nothing else
+#
+# That is the E3AP encoder, the ZMQ connector and the outbound lock-free queue --
+# i.e. exactly the stages the RAN->dApp latency budget attributes its residual to
+# ("queueing within libe3, E3AP encoding, and the transmission"). An unoptimised
+# build inflates all three and the only symptom is a slower number, which is
+# indistinguishable from the system genuinely being slow.
+#
+# Overridable for a debug build:  LIBE3_BUILD_TYPE=RelWithDebInfo ./build.sh
+LIBE3_BUILD_TYPE="${LIBE3_BUILD_TYPE:-Release}"
+echo "    libe3 CMAKE_BUILD_TYPE=${LIBE3_BUILD_TYPE}"
+cmake -S libe3 -B libe3/build -DCMAKE_BUILD_TYPE="${LIBE3_BUILD_TYPE}" \
+      -DLIBE3_ENABLE_ASN1=ON -DLIBE3_ENABLE_JSON=ON \
       -DLIBE3_BUILD_EXAMPLES=OFF -DLIBE3_BUILD_TESTS=OFF
 
 # --- toolchain shim: supply BOOLEAN.* to libe3's E3AP runtime --------------
