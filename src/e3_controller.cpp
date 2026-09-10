@@ -32,6 +32,7 @@
 #include <immintrin.h>
 #endif
 #include <libe3/libe3.hpp>
+#include <libe3/latrec.h>
 
 extern "C" {
 #include "jbpf_io.h"
@@ -232,6 +233,14 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "[E3Controller] configuration error: %s\n", cfg_err.c_str());
         return 1;
     }
+    /* Where the stage-record rings go. This has to run before any thread opens
+     * one: the directory is read at each ring open, and both libe3's agent
+     * threads and our own pipeline worker open theirs as they start up. A no-op
+     * in a build without the recorder, so it is unconditional. */
+    if (!config.logging.latrec_dir.empty()) {
+        latrec_set_output_dir(config.logging.latrec_dir.c_str());
+    }
+
     e3config::print_config(config);
 
     /* The LCM socket is created by the gNB, so its absence usually means the gNB
@@ -280,22 +289,10 @@ int main(int argc, char** argv)
         return e == libe3::EncodingFormat::JSON ? "JSON" : "ASN.1 (APER)";
     };
 
-    // Derive the Spectrum SM's stats path from --stats-log by inserting
-    // "_spectrum" before the extension (or appending it if there's no
-    // extension). Keeps a single CLI flag while letting both SMs write
-    // side-by-side without colliding on the same file. Derived here so the
-    // banner below and the SM registration further down share the value.
-    std::string spectrum_stats_log_path;
-    if (!config.logging.stats_log_path.empty()) {
-        const std::string& p = config.logging.stats_log_path;
-        auto dot = p.find_last_of('.');
-        auto sep = p.find_last_of('/');
-        if (dot != std::string::npos && (sep == std::string::npos || dot > sep)) {
-            spectrum_stats_log_path = p.substr(0, dot) + "_spectrum" + p.substr(dot);
-        } else {
-            spectrum_stats_log_path = p + "_spectrum";
-        }
-    }
+    // Per-slot stage CSV for the legacy eCPRI SM (RF=1) only. Its own config
+    // key now rather than a suffix derived from the slot-path SM's, because the
+    // slot-path SM no longer writes one -- see logging.latrec_dir.
+    const std::string& spectrum_stats_log_path = config.logging.spectrum_stats_log_path;
 
     std::cout << "=============================================\n";
     std::cout << "E3 Agent Configuration (single-encoding):\n"
@@ -306,8 +303,6 @@ int main(int argc, char** argv)
               << "  Channel:     setup=" << config.e3.setup_port
               << " publisher=" << config.e3.publisher_port
               << " subscriber=" << config.e3.subscriber_port << "\n"
-              << "  Stats log:   "
-              << (config.logging.stats_log_path.empty() ? "(disabled)" : config.logging.stats_log_path) << "\n"
               << "  Spectrum stats: "
               << (spectrum_stats_log_path.empty() ? "(disabled)" : spectrum_stats_log_path)
               << "\n\n";

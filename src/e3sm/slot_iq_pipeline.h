@@ -94,10 +94,13 @@ struct SlotSample {
     uint32_t bytes_written{0};
     uint8_t  flags{0};
 
-    /* RAN anchor (CLOCK_REALTIME ns) stamped by the ocudu hook caller
-     * at hand-off. Same domain as jbpf_time_get_ns() and the dApp's
-     * time.time_ns(), so it subtracts cleanly on both sides for true
-     * RAN -> dApp end-to-end latency. */
+    /* A1 entry: RAN anchor stamped by the ocudu hook caller at hand-off, on the
+     * last symbol with the grid complete and nothing yet copied.
+     *
+     * CLOCK_MONOTONIC ns, same domain as jbpf_time_get_ns() (patched) and
+     * dispatch_ts_ns below, so the stage subtractions are exact. Note this is
+     * no longer comparable against a dApp's CLOCK_REALTIME clock without going
+     * through a ring header's mono/real pair. */
     uint64_t gnb_ts_ns{0};
 
     /* Codelet ENTRY timestamp (CLOCK_MONOTONIC ns). Subtract gnb_ts_ns for the
@@ -110,8 +113,9 @@ struct SlotSample {
     uint64_t codelet_ts_ns{0};
 
     /* Controller-side timestamps captured when the slot arrived at
-     * the dispatcher poll. dispatch_ts_ns = CLOCK_REALTIME ns at
-     * dispatcher entry (for stage timing vs. codelet_ts_ns).
+     * the dispatcher poll. dispatch_ts_ns = CLOCK_MONOTONIC ns at
+     * dispatcher entry (for stage timing vs. codelet_ts_ns). One read per poll
+     * batch, shared by every buffer in the batch.
      * recv_us = wall-clock microseconds at dispatcher entry (legacy,
      * kept for backwards-compatible stats consumers).
      * sample_id = monotonic count since startup. */
@@ -201,7 +205,7 @@ private:
          * this buffer; the worker releases it (jbpf_io_channel_release_buf) after
          * the consumer fan-out. Valid from enqueue until that release. */
         void*    buf;
-        /* CLOCK_REALTIME ns at dispatcher poll entry. Used by the SM to
+        /* CLOCK_MONOTONIC ns at dispatcher poll entry. Used by the SM to
          * derive the codelet -> dispatcher stage cost. */
         uint64_t dispatch_ts_ns;
         uint32_t recv_us;
