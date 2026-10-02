@@ -27,6 +27,9 @@
 
 #include <atomic>
 #include <cstddef>
+#include <atomic>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <string>
@@ -38,16 +41,16 @@ public:
 
     E3SMLayer1(e3sm_pipeline::SlotIqPipeline& pipeline,
                libe3::E3Agent& agent,
-               std::string shm_name = "/e3_ran_buffers",
-               std::size_t shm_size = static_cast<std::size_t>(1) << 30,
-               int target_slot = -1,
-               std::string stats_log_path = "")
+               const e3config::ControllerConfig& cfg)
         : pipeline_(pipeline),
           agent_(&agent),
-          shm_name_(std::move(shm_name)),
-          shm_size_(shm_size),
-          target_slot_(target_slot),
-          stats_log_path_(std::move(stats_log_path))
+          shm_name_(cfg.shm.name),
+          shm_size_(cfg.shm.size_bytes),
+          target_slot_(cfg.target_slot),
+          drops_log_path_(cfg.logging.drops_log_path),
+          geom_(cfg.radio),
+          cbf16_scale_(cfg.shm.cbf16_scale),
+          writer_mode_(cfg.shm.writer)
     {}
 
     std::string name() const override { return "L1 KPM Service Model"; }
@@ -70,7 +73,49 @@ public:
         uint32_t request_message_id,
         const libe3::DAppControlAction& action) override;
 
+    enum class Drop : uint8_t {
+        NotRunning = 0,      /* stopped, or a straggler after stop() */
+        SlotFiltered,        /* target_slot filter excluded it (deliberate)   */
+        GeometryMismatch,    /* config vs RAN disagreement; latched refusal   */
+        NoIq,                /* controller mode, but codelet sent descriptor  */
+        BlobTooSmall,        /* short blob; a partial row would be wrong data */
+        RanPublishedNothing, /* gNB helper flagged TRUNCATED / wrote 0 bytes  */
+        NoSubscribers,       /* nobody subscribed to RF=2 yet                 */
+        EncodeFailed,        /* APER/JSON encode error                        */
+        EmitFailed,          /* libe3 rejected the outbound enqueue           */
+        COUNT
+    };
+    static constexpr std::size_t kDropCount = static_cast<std::size_t>(Drop::COUNT);
+    static const char*           drop_name(Drop d);
+
+    /* Relaxed loads: on_sample writes these on the worker thread while the
+     * summary reads them from main.*/
+    uint64_t drop_count(Drop d) const {
+        return drops_[static_cast<std::size_t>(d)].load(std::memory_order_relaxed);
+    }
+    uint64_t total_drops() const;
+    uint64_t published_slots() const {
+        return slot_publish_seq_.load(std::memory_order_relaxed);
+    }
+
+    /* Multi-line human summary: published, total dropped, and each non-zero
+     * reason. Returns the "nothing dropped" line when all counters are zero,
+     * so the caller can print it unconditionally. */
+    std::string drops_summary() const;
+
 private:
+    /* Bump a reason. Also drives the throttled live log line. */
+    void note_drop(Drop d);
+
+    /* Append a cumulative row to drops_log_path_, at most once a second.
+     * Cumulative rather than per-interval so a row is meaningful on its own and
+     * a missed flush cannot lose events. No-op when the path is empty.
+     *
+     * This is the only file this SM writes. It is aggregate and throttled, so
+     * unlike the per-slot stage CSV it replaced it does no work on the slot
+     * path -- stage timing is latrec's job now, see l1_kpm_trace.h. */
+    void maybe_log_drops();
+
     /* SlotIqPipeline consumer callback (worker thread). Receives one
      * fully-assembled UL slot from ocudu's resource grid. */
     void on_sample(const e3sm_pipeline::SlotSample& s);
@@ -80,21 +125,58 @@ private:
 
     std::string shm_name_;
     std::size_t shm_size_;
-    /* Optional single-slot filter; absolute slot within a 10 ms frame
-     * (subframe_id*2 + slot_id at 30 kHz SCS). -1 disables. */
+    /* Optional single-slot filter; slot index within a 10 ms frame, i.e. the
+     * value ocudu's slot_point::slot_index() returns (0..19 at 30 kHz SCS).
+     * -1 disables. Superseded by workstream F's codelet-side slot_mask, which
+     * makes the same decision before any data moves. */
     int         target_slot_;
-    /* Path for the per-slot stage CSV. Empty disables stats logging. */
-    std::string stats_log_path_;
+    /* Path for the throttled drop-accounting CSV. Empty disables it. */
+    std::string drops_log_path_;
 
     e3sm_spectrum::ShmIqWriter shm_writer_;
     bool                       running_{false};
 
-    /* Per-slot stats. slot_publish_seq_ increments for every slot
-     * we publish; counts indications emitted to dApps. stats_log_ is
-     * opened lazily on the first published slot when stats_log_path_
-     * is non-empty. */
-    uint64_t      slot_publish_seq_{0};
-    std::ofstream stats_log_;
+    /* Row geometry from the YAML config; replaces the old constexpr in
+     * e3sm_shm_writer.h. Treated as a bootstrap and checked against the RAN on
+     * the first slot -- see the validate_against_ran() call in on_sample. */
+    e3config::RadioGeometry geom_;
+    float                   cbf16_scale_{1.0f};
+
+    /* Who converts and writes the fp16 rows. Exactly one process may; see
+     * e3config::ShmWriter. */
+    e3config::ShmWriter writer_mode_{e3config::ShmWriter::Controller};
+
+    /* One-shot geometry check. geometry_ok_ latches false on mismatch so we
+     * refuse to publish rather than emit rows the dApp would misread. */
+    bool geometry_checked_{false};
+    bool geometry_ok_{true};
+
+    /* One-shot warning when the gNB helper reports it published nothing, so a
+     * persistent misconfiguration does not flood the log at slot rate. */
+    bool truncated_warned_{false};
+
+    /* One-shot: controller mode configured but the codelet only sends descriptors. */
+    bool writer_mode_warned_{false};
+
+    /* Increments for every slot that reaches the traced region, and keys that
+     * slot's stage records across the whole E3 path including libe3's own -- it
+     * is published to the library with latrec_ctx_set() before emitting and
+     * comes back as the outbound leg's origin_seq. Only meaningful within this
+     * ring; every producer numbers from 1.
+     *
+     * Atomic because the shutdown summary reads it from the main thread while
+     * on_sample increments it on the worker. */
+    std::atomic<uint64_t> slot_publish_seq_{0};
+
+    /* Drop accounting -- see enum Drop. */
+    std::atomic<uint64_t> drops_[kDropCount]{};
+    std::ofstream         drops_log_;
+    /* Throttles both the live stderr line and the CSV row to <=1/s, so a
+     * pathological run cannot turn drop reporting into the bottleneck. */
+    std::chrono::steady_clock::time_point drops_last_report_{};
+    uint64_t                              drops_last_total_{0};
+    /* Set when the drop CSV is opened, so uptime_s starts at 0 in the file. */
+    std::chrono::steady_clock::time_point drops_log_start_{};
 
     /* Encoded indication payload (one encoding per the agent config).
      * Capacity grows on first use, reused across slots. */

@@ -1,0 +1,201 @@
+# Build the controller both ways, and measure what recording a slot costs.
+#
+# The matrix leg is the one thing that has to vary: libe3's stage recorder is a
+# build-time decision (-DLIBE3_ENABLE_LATREC), carried to us as a PUBLIC compile
+# definition, so "traced" and "untraced" are two different binaries rather than
+# two run modes. Building both is what stops the untraced path from rotting
+# unnoticed - and the untraced leg is the one that proves the stamps really do
+# compile away to nothing.
+name: build and measure
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (latrec=${{ matrix.latrec }})
+    runs-on: ubuntu-latest
+    # Cold, this is asn1c-from-source + libe3 + jbpf and its third-party tree +
+    # the controller. Comfortably inside an hour; nowhere near the 6h default.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        latrec: [on, off]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # build.sh fetches the submodules itself and then runs jbpf's
+          # init_and_patch_submodules.sh over them. Letting the checkout action
+          # do it first would hand that patch script a tree it did not lay out.
+          submodules: false
+
+      # The libe3 pin decides which asn1c revision is wanted, so it belongs in
+      # the cache key. hashFiles cannot read a gitlink, and the submodule is not
+      # checked out yet, so read the pinned SHA straight out of the tree object.
+      - name: Read the libe3 pin
+        id: pin
+        run: echo "sha=$(git rev-parse HEAD:libe3)" >> "$GITHUB_OUTPUT"
+
+      # asn1c is built from the mouse07410 fork, which is minutes of autotools.
+      # No restore-keys: a stale asn1c is worse than no cache, because it would
+      # generate against a different grammar than the pinned libe3 expects.
+      - name: Cache asn1c
+        id: cache-asn1c
+        uses: actions/cache@v4
+        with:
+          path: /opt/asn1c
+          key: asn1c-${{ runner.os }}-${{ steps.pin.outputs.sha }}
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-latrec${{ matrix.latrec }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-latrec${{ matrix.latrec }}-
+            ccache-${{ runner.os }}-
+
+      - name: Install dependencies and build
+        env:
+          # -march=native would tune to whatever CPU this runner happens to be,
+          # which breaks both ccache reuse across heterogeneous runners and any
+          # comparison of the measurements below between runs.
+          E3C_CMAKE_ARGS: -DUSE_NATIVE=OFF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ccache
+          export PATH="/usr/lib/ccache:${PATH}"
+          if [ "${{ matrix.latrec }}" = "on" ]; then
+            ./build.sh --install-deps --latrec
+          else
+            ./build.sh --install-deps
+          fi
+
+      - name: Record the machine the numbers came from
+        run: |
+          {
+            echo "## Environment (latrec=${{ matrix.latrec }})"
+            echo
+            echo '```'
+            grep -m1 'model name' /proc/cpuinfo || true
+            echo "nproc: $(nproc)"
+            echo "/dev/shm: $(df -h /dev/shm | tail -1)"
+            echo "libe3 pin: $(git -C libe3 rev-parse --short HEAD) ($(cat libe3/VERSION))"
+            echo '```'
+          } > report.md
+
+      # The claim being tested: with the recorder off, nothing links against the
+      # recorder runtime. A timing test cannot show that - only the symbol
+      # table can.
+      #
+      # The check is on global and undefined symbols specifically. libe3 only
+      # compiles src/core/latrec.c when the recorder is on, so a traced binary
+      # carries `D latrec_tls` plus `T latrec_seq_next` / `latrec_tls_open_as`
+      # / `latrec_set_output_dir`; an untraced one carries none of them. What
+      # an untraced binary can still carry is lowercase `t` entries for the
+      # inline no-op stubs latrec.h substitutes - local copies the optimiser
+      # did not bother to discard. Those are empty functions, not the
+      # recorder, and grepping for them would assert something that is not
+      # true and would fail for the wrong reason.
+      - name: Assert nothing links the recorder
+        if: matrix.latrec == 'off'
+        run: |
+          status=0
+          for binary in out/bin/e3_controller out/bin/bench_stage_recording; do
+            # Uppercase type letter = global or undefined, i.e. a real link.
+            if nm -C "$binary" | grep -E ' [A-Z] ' | grep -i latrec; then
+              echo "::error::$binary links latrec symbols in an untraced build"
+              status=1
+            else
+              echo "ok: $binary links no latrec symbols"
+            fi
+            if nm -C "$binary" | grep -qw latrec_tls; then
+              echo "::error::$binary carries the latrec ring registry"
+              status=1
+            fi
+          done
+          [ "$status" -eq 0 ] || exit 1
+          {
+            echo
+            echo '## Not linked'
+            echo
+            echo 'Neither binary links any latrec symbol, and neither carries the ring'
+            echo 'registry. Only latrec.h'"'"'s inline no-op stubs remain, as local symbols.'
+          } >> report.md
+
+      - name: Measure what recording a slot costs
+        run: |
+          mkdir -p rings
+          {
+            echo
+            ./out/bin/bench_stage_recording \
+              --latrec-dir "$PWD/rings" \
+              --csv-path "$PWD/bench_csv_arm.log"
+          } >> report.md 2>&1
+          # The bench fails if any stamp had to be clamped: that would mean its
+          # synthetic slot times are not ascending, so its latrec arm would be
+          # exercising the clamp path rather than the one production takes.
+
+      # Converting the capture with libe3's own tool is what checks the parts of
+      # the contract that live outside this repository: that the ring role maps
+      # to the component we intend, that the stage ids form a complete source
+      # leg, and that the emit-tail hop column materialises. A capture that
+      # wrapped is not a valid measurement, so fail on it.
+      - name: Convert and validate the capture
+        if: matrix.latrec == 'on'
+        run: |
+          python3 -m pip install --quiet numpy
+          TOOLS=/usr/local/share/libe3/tools
+          python3 "$TOOLS/latrec2csv.py" rings | tee convert.log
+          {
+            echo
+            echo '## Capture'
+            echo
+            echo '```'
+            cat convert.log
+            echo '```'
+          } >> report.md
+
+          # The role must land in ocudu.csv, not other.csv: latrec2csv maps the
+          # role prefix through its own table, so a rename here silently
+          # reattributes every record to an unknown component.
+          test -f rings/csv/ocudu.csv \
+            || { echo "::error::records were not attributed to the ocudu component"; exit 1; }
+
+          # The emit tail replaces the removed CSV's emit_ns, and only exists
+          # because (ENCODE_E3SM_DONE -> WAIT_ENTER) is a declared extra hop.
+          head -2 rings/csv/ocudu.csv | grep -q 'ENCODE_E3SM_DONE__WAIT_ENTER_us' \
+            || { echo "::error::the emit-tail hop column is missing"; exit 1; }
+
+          python3 - <<'PY'
+          import csv, sys
+          with open('rings/csv/rings.csv') as fh:
+              rows = list(csv.DictReader(fh))
+          if not rows:
+              sys.exit('::error::no rings were written')
+          for r in rows:
+              # A wrapped ring has lost records off the front, so any span
+              # computed across the wrap is wrong. Better to fail than to
+              # publish a number from a truncated capture.
+              if r['wrapped'] != '0' or int(r['lost_records'] or 0):
+                  sys.exit(f"::error::{r['ring']} wrapped ({r['lost_records']} lost) "
+                           "- shorten the run or raise LATREC_ENTRIES_LOG2")
+              print(f"ok: {r['ring']} {r['rec_count']} records, no wrap, "
+                    f"clock {r['clock_ns_per_call']} ns/call")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-latrec-${{ matrix.latrec }}
+          path: |
+            report.md
+            rings/csv/
+          if-no-files-found: warn

@@ -25,6 +25,8 @@
 #pragma once
 
 #include "../../codelets/uplink_slot_samples/uplink_slot_data.h"
+#include "../../codelets/include/jbpf_e3_slot_api.h"
+#include "e3_config.h"
 #include "jbpf_dispatcher.h"
 #include <libe3/libe3.hpp>
 
@@ -67,24 +69,53 @@ struct SlotSample {
     uint16_t nof_subcarriers{0};
 
     /* Pointer into the worker's backing buffer. Valid for the callback
-     * duration only. cbf16_t = 4 bytes per complex sample. */
+     * duration only. cbf16_t = 4 bytes per complex sample.
+     *
+     * NULL in `writer: gnb` mode: there the gNB-side helper has already
+     * converted the slot straight into /e3_ran_buffers, so no IQ crosses the
+     * jbpf ring and the descriptor below says where the row landed. */
     const uint8_t* iq{nullptr};
     uint32_t       iq_size_bytes{0};
 
-    /* RAN anchor (CLOCK_REALTIME ns) stamped by the ocudu hook caller
-     * at hand-off. Same domain as jbpf_time_get_ns() and the dApp's
-     * time.time_ns(), so it subtracts cleanly on both sides for true
-     * RAN -> dApp end-to-end latency. */
+    /* Row the gNB-side helper wrote, in `writer: gnb` mode -- the
+     * (fh_buffer_index, fh_write_index) pair the Indication carries.
+     *
+     * Meaningless in `writer: controller` mode, where the controller writes the
+     * row itself and derives these from its own ring cursor. Exactly one writer
+     * may own that cursor, which is what e3config::ShmWriter enforces. */
+    uint8_t  fh_buffer_index{0};
+    uint32_t fh_write_index{0};
+
+    /* Bytes the gNB helper actually wrote into the row, and the codelet's
+     * status flags. bytes_written == 0 with E3_SLOT_FLAG_TRUNCATED set means the
+     * helper REFUSED (geometry mismatch, unattached, or a slot larger than the
+     * row) rather than writing a partial one — publishing a prefix would be a
+     * silently wrong measurement. */
+    uint32_t bytes_written{0};
+    uint8_t  flags{0};
+
+    /* A1 entry: RAN anchor stamped by the ocudu hook caller at hand-off, on the
+     * last symbol with the grid complete and nothing yet copied.
+     *
+     * CLOCK_MONOTONIC ns, same domain as jbpf_time_get_ns() (patched) and
+     * dispatch_ts_ns below, so the stage subtractions are exact. Note this is
+     * no longer comparable against a dApp's CLOCK_REALTIME clock without going
+     * through a ring header's mono/real pair. */
     uint64_t gnb_ts_ns{0};
 
-    /* Codelet-entry timestamp (CLOCK_REALTIME ns). Subtract gnb_ts_ns
-     * to get the jbpf invocation overhead. Used by the SM to log the
-     * gnb_to_codelet stage in statistics_layer1.log. */
+    /* Codelet ENTRY timestamp (CLOCK_MONOTONIC ns). Subtract gnb_ts_ns for the
+     * jbpf invocation overhead alone -- this is what gnb_to_codelet_us reports. */
+    uint64_t codelet_entry_ts_ns{0};
+
+    /* Codelet EXIT timestamp. (codelet_ts_ns - codelet_entry_ts_ns) is the
+     * codelet's own execution; in `writer: gnb` that is the convert + row write,
+     * reported as codelet_publish_us. Also the base for codelet_to_dispatch. */
     uint64_t codelet_ts_ns{0};
 
     /* Controller-side timestamps captured when the slot arrived at
-     * the dispatcher poll. dispatch_ts_ns = CLOCK_REALTIME ns at
-     * dispatcher entry (for stage timing vs. codelet_ts_ns).
+     * the dispatcher poll. dispatch_ts_ns = CLOCK_MONOTONIC ns at
+     * dispatcher entry (for stage timing vs. codelet_ts_ns). One read per poll
+     * batch, shared by every buffer in the batch.
      * recv_us = wall-clock microseconds at dispatcher entry (legacy,
      * kept for backwards-compatible stats consumers).
      * sample_id = monotonic count since startup. */
@@ -111,6 +142,24 @@ public:
 
         /* CPU core to pin the worker thread on. -1 = no pinning. */
         int worker_core{-1};
+
+        /* Who converts and writes the fp16 rows. In Gnb mode the pipeline sends
+         * the codelet an e3_shm_cfg so the gNB-side helper can attach to
+         * /e3_ran_buffers and write rows itself; in Controller mode it sends
+         * nothing and E3SMLayer1 does the conversion. */
+        e3config::ShmWriter writer{e3config::ShmWriter::Controller};
+
+        /* Region identity + geometry handed to the gNB-side helper. Only used in
+         * Gnb mode. The controller OWNS the region, so it is the one that gets to
+         * say where it is and what shape it has; the helper cross-checks these
+         * against SharedMemoryHeader on attach and refuses a mismatch. */
+        std::string             shm_name{"/e3_ran_buffers"};
+        e3config::RadioGeometry radio{};
+        float                   cbf16_scale{1.0f};
+
+        /* Bumped by the controller whenever it recreates the region, so a helper
+         * holding a stale mapping refuses rather than writing into it. */
+        uint16_t shm_epoch{1};
     };
 
     SlotIqPipeline(JbpfDispatcher& dispatcher, jbpf_io_ctx* io_ctx, Config cfg);
@@ -156,7 +205,7 @@ private:
          * this buffer; the worker releases it (jbpf_io_channel_release_buf) after
          * the consumer fan-out. Valid from enqueue until that release. */
         void*    buf;
-        /* CLOCK_REALTIME ns at dispatcher poll entry. Used by the SM to
+        /* CLOCK_MONOTONIC ns at dispatcher poll entry. Used by the SM to
          * derive the codelet -> dispatcher stage cost. */
         uint64_t dispatch_ts_ns;
         uint32_t recv_us;
@@ -175,6 +224,15 @@ private:
      * on the poll thread. On a full queue it releases the dropped buffer itself
      * (the worker won't see it); the worker releases the rest after fan-out. */
     void process_buffers(struct jbpf_io_stream_id* sid, void** bufs, int n);
+
+    /* Send the e3_shm_cfg control-input message so the gNB-side helper attaches
+     * to /e3_ran_buffers. Gnb mode only; no-op otherwise.
+     *
+     * Called from process_buffers, i.e. on the dispatcher poll thread, NOT from
+     * start(): jbpf_io_channel_send_msg must run on the thread that owns the
+     * io_ctx. Same constraint and the same lazy-on-first-buffer pattern as
+     * IqPipeline's PRB filter config. Retried until it succeeds. */
+    void maybe_send_shm_cfg();
 
     /* Worker-thread loop: drains the SPSC queue, fans out to each
      * registered consumer via the SlotSample callback. */
@@ -203,6 +261,25 @@ private:
     /* Stream ID matches the codelet binary's compile-time UUID -
      * keep in sync with codelets/uplink_slot_samples/uplink_slot_samples.yaml
      * (stream_id: "7531abcd1234567890fedcba0987654a"). */
+    /* Control-input channels the codelet declares (workstream B/C):
+     *   shm_in  -- struct e3_shm_cfg,  tells the gNB helper where/what shape
+     *   sel_in  -- struct e3_slot_sel, temporal selector (workstream F)
+     *
+     * Distinct stream IDs from the output channel. Keep in sync with the
+     * jbpf_control_input_map names in uplink_slot_collect.c and with
+     * codelets/uplink_slot_samples/uplink_slot_samples.yaml. */
+    struct jbpf_io_stream_id shm_cfg_stream_id_ {
+        0x75, 0x31, 0xab, 0xcd, 0x12, 0x34, 0x56, 0x78,
+        0x90, 0xfe, 0xdc, 0xba, 0x09, 0x87, 0x65, 0x4b
+    };
+    struct jbpf_io_stream_id slot_sel_stream_id_ {
+        0x75, 0x31, 0xab, 0xcd, 0x12, 0x34, 0x56, 0x78,
+        0x90, 0xfe, 0xdc, 0xba, 0x09, 0x87, 0x65, 0x4c
+    };
+
+    /* e3_shm_cfg delivered? Retried on every buffer batch until it lands. */
+    bool shm_cfg_sent_{false};
+
     struct jbpf_io_stream_id slot_iq_stream_id_ {
         .id = {0x75, 0x31, 0xab, 0xcd, 0x12, 0x34, 0x56, 0x78,
                0x90, 0xfe, 0xdc, 0xba, 0x09, 0x87, 0x65, 0x4a}

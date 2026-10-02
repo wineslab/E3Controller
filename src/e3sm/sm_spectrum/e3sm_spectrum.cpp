@@ -6,8 +6,10 @@
 
 #include "e3sm_spectrum.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 
 libe3::ErrorCode E3SMSpectrum::init() {
     // Register the pipeline consumer once at SM registration. IqPipeline keeps
@@ -72,6 +74,20 @@ void E3SMSpectrum::on_sample(const e3sm_pipeline::DecompressedSample& s) {
     const auto subs = get_subscribers();
     if (subs.empty()) return;  // No one is listening.
 
+    using clock = std::chrono::steady_clock;
+
+    // CLOCK_REALTIME ns at on_sample entry. Same domain as
+    // s.gnb_ts_ns / s.codelet_ts_ns / s.dispatch_ts_ns, so the three
+    // RAN-side stage durations subtract cleanly into statistics_spectrum.log.
+    // Mirrors E3SMLayer1's handler-entry stamp.
+    auto realtime_ns_now = []() -> uint64_t {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+               static_cast<uint64_t>(ts.tv_nsec);
+    };
+    const uint64_t handler_entry_ns = realtime_ns_now();
+
     // RF=1 in-band IQ telemetry is APER-only (Spectrum-IQDataIndication). 
     // There is no in-band IQ JSON encoder, so
     // warn once and drop if the agent is running JSON.
@@ -121,12 +137,17 @@ void E3SMSpectrum::on_sample(const e3sm_pipeline::DecompressedSample& s) {
     indication_.timestamp = static_cast<uint32_t>(s.raw->timestamp);
 
     encoded_buf_.clear();
-    if (!e3sm_spectrum::encode_spectrum_iq_indication(indication_, encoded_buf_)) {
+    const auto t_encode_start = clock::now();
+    const bool encoded_ok =
+        e3sm_spectrum::encode_spectrum_iq_indication(indication_, encoded_buf_);
+    const auto t_encode_end = clock::now();
+    if (!encoded_ok) {
         std::fprintf(stderr, "[E3SMSpectrum] Failed to APER-encode IQ indication\n");
         return;
     }
 
     // Fan out one indication per subscriber.
+    const auto t_emit_start = clock::now();
     for (uint32_t dapp_id : subs) {
         libe3::Pdu pdu = make_indication_pdu(dapp_id, RAN_FUNCTION_ID, encoded_buf_);
         auto rc = emit_outbound(std::move(pdu));
@@ -136,6 +157,46 @@ void E3SMSpectrum::on_sample(const e3sm_pipeline::DecompressedSample& s) {
                 dapp_id, libe3::error_code_to_string(rc));
         }
     }
+    const auto t_emit_end = clock::now();
+
+    // --- Per-sample statistics (disabled unless --stats-log was given) ---
+    ++sample_publish_seq_;
+    if (stats_log_path_.empty()) {
+        return;
+    }
+    // Schema (matches E3SMLayer1's statistics_layer1.log columns for the
+    // three RAN-side stages; the trailing per-SM stage names differ):
+    //   sample_seq,
+    //   gnb_to_codelet_us,     ocudu hook -> codelet entry (jbpf invocation)
+    //   codelet_to_dispatch_us,codelet -> IqPipeline dispatcher poll
+    //   dispatch_to_handler_us,dispatcher -> on_sample (SPSC queue wait)
+    //   decompress_ns,         BFP-9 decompression (IqPipeline worker)
+    //   encode_ns,             APER encode cost
+    //   emit_ns,               emit_outbound fan-out (SM-side enqueue)
+    //   fft_size,              zero-padded FFT bin count
+    //   payload_bytes          codelet-side compressed section size
+    if (!stats_log_.is_open()) {
+        stats_log_.open(stats_log_path_, std::ios::out | std::ios::trunc);
+        stats_log_ << "sample_seq,"
+                      "gnb_to_codelet_us,codelet_to_dispatch_us,dispatch_to_handler_us,"
+                      "decompress_ns,encode_ns,emit_ns,fft_size,payload_bytes\n";
+    }
+    auto ns_between = [](auto a, auto b) {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count();
+    };
+    auto sat_us = [](uint64_t lhs, uint64_t rhs) -> uint64_t {
+        return (lhs > rhs) ? ((lhs - rhs) / 1000ULL) : 0ULL;
+    };
+    stats_log_ << sample_publish_seq_ << ','
+               << sat_us(s.codelet_ts_ns,  s.gnb_ts_ns)      << ','
+               << sat_us(s.dispatch_ts_ns, s.codelet_ts_ns)  << ','
+               << sat_us(handler_entry_ns, s.dispatch_ts_ns) << ','
+               << s.decompress_ns                            << ','
+               << ns_between(t_encode_start, t_encode_end)   << ','
+               << ns_between(t_emit_start,   t_emit_end)     << ','
+               << fft_size                                   << ','
+               << s.raw->payload_size                        << '\n';
+    stats_log_.flush();
 }
 
 libe3::ErrorCode E3SMSpectrum::handle_control_action(

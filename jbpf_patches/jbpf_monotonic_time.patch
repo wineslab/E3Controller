@@ -1,0 +1,25 @@
+--- a/src/core/jbpf_helper_impl.c
++++ b/src/core/jbpf_helper_impl.c
+@@ -328,7 +328,21 @@
+ {
+     struct timespec curr_time = {0, 0};
+     uint64_t curr_time_ns = 0;
+-    clock_gettime(CLOCK_REALTIME, &curr_time);
++    /* CLOCK_MONOTONIC, not CLOCK_REALTIME (LOCAL PATCH -- see
++     * jbpf_monotonic_time.patch in the ocudu_project root).
++     *
++     * This helper stamps the E3 codelet's codelet_ts_ns, which is subtracted
++     * from the gNB's gnb_ts_ns to produce gnb_to_codelet_us. The gNB, the
++     * E3Controller and the dApp all read CLOCK_MONOTONIC now, and it is also the
++     * clock latrec records, so every stage of the path shares one epoch and the
++     * stage CSVs join the latrec rings with no offset arithmetic.
++     *
++     * Monotonic additionally cannot be stepped by NTP, which REALTIME can --
++     * a step mid-run silently corrupts every stage derived from these stamps.
++     *
++     * Caveat: monotonic shares an origin only within one boot, so stamps are
++     * comparable across processes on ONE host, not across hosts. */
++    clock_gettime(CLOCK_MONOTONIC, &curr_time);
+     curr_time_ns = curr_time.tv_nsec + curr_time.tv_sec * 1.0e9;
+     return curr_time_ns;
+ }

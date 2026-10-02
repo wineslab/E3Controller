@@ -1,0 +1,218 @@
+# E3Controller configuration -- ASN.1 (APER) variant.
+#
+# Start with:  e3_controller --config configs/e3_controller_asn1.yaml
+# and the dApp with:  ./start_dapp.sh --encoding asn1 --cores ...
+#
+# Differs from e3_controller.yaml ONLY in the e3: block (encoding + the
+# three ports). Everything else is identical on purpose.
+#
+# This is the only argument the controller takes:  e3_controller --config <this file>
+#
+# Unknown keys are a startup ERROR, not a warning. A typo'd `nof_port:` that was
+# silently ignored would leave the controller sizing rows for the default while
+# you believed you had configured something else — which is the exact failure
+# this file exists to prevent.
+
+# ---------------------------------------------------------------------------
+# Radio geometry — MUST match the running gNB.
+#
+# Checked, not trusted: the controller compares these against the geometry the
+# RAN reports in the first slot (jbpf_ran_slot_ctx carries nof_ports /
+# nof_symbols / nof_subcarriers) and refuses to publish on a mismatch.
+#
+# The asymmetry worth knowing: declaring FEWER ports than the gNB sends is
+# already safe (the gNB-side helper refuses and the codelet flags it). Declaring
+# MORE is what needs the check — the surplus antennas get written as silence and
+# the dApp cannot tell them from a genuinely quiet antenna.
+# ---------------------------------------------------------------------------
+radio:
+  nof_ports:   4       # UL antenna ports (1..8)
+  nof_prbs:    273     # 100 MHz @ 30 kHz SCS
+  nof_symbols: 14      # per slot (12 or 14)
+  scs_khz:     30      # 15 | 30 | 60 | 120 — also fixes slots/frame (20 @ 30 kHz)
+
+# ---------------------------------------------------------------------------
+# /e3_ran_buffers — the region the controller OWNS and the dApp reads.
+# Layout matches SharedMemoryHeader in the NVIDIA L1 KPM SM / cuBB contract.
+# ---------------------------------------------------------------------------
+shm:
+  name:        /e3_ran_buffers
+  size_bytes:  176117824    # 168 MiB = 64 B header + 2 x 120 x 733,824 B
+  # Chosen to MATCH NVIDIA Aerial's default FH ring depth, so our geometry is
+  # like-for-like with a cuBB deployment rather than an arbitrary local choice.
+  #
+  # Aerial does not define the segment size as a constant. cuBB's E3 agent takes
+  # the depth as a constructor parameter, defaulted in
+  # aerial-cuda-accelerated-ran/cuPHY-CP/data_lake/data_lake.hpp:
+  #
+  #     numRowsToInsertFh    = 120     <-- this is what we match
+  #     numRowsToInsertPusch = 400
+  #     numRowsToInsertHest  = 200
+  #
+  # and publishes the result through SharedMemoryHeader::num_fh_rows, whose
+  # layout in cuPHY-CP/data_lake/e3_agent.hpp is field-for-field identical to
+  # ours in src/e3sm/utils/e3sm_shm_writer.h. The key string matches too:
+  # E3_SHARED_MEMORY_KEY = "/e3_ran_buffers".
+  #
+  # Sizing, from e3sm_shm_writer.cpp:176-187 — the region is a DOUBLE-buffered
+  # ring, so rows-per-buffer = (size_bytes - sizeof(SharedMemoryHeader)) / 2 /
+  # row_bytes, and row_bytes for 4 ports x 273 PRB x 14 sym is 733,824 B.
+  #
+  #   1 GiB   -> 731 rows/buffer  (1462 total, ~2.2 s at 650 slots/s)
+  #   168 MiB -> 120 rows/buffer  ( 240 total, ~370 ms)          <-- here, = Aerial
+  #   128 MiB ->  91 rows/buffer  ( 182 total, ~280 ms)
+  #    24 MiB ->  17 rows/buffer  (  34 total, ~52 ms)
+  #
+  # None of this is a latency lever: the dApp drains a row in ~150 us end to end,
+  # so even 24 MiB is ~340x more buffering than the consumer needs. Depth only
+  # decides how long a stalled consumer can fall behind before rows are
+  # overwritten. What 1 GiB did cost was a 1 GiB zero-fill at open() (the memset
+  # on line 164) and a quarter of this pod's 4 GiB /dev/shm, which also holds the
+  # 1 GiB jbpf IO region below. 168 MiB + 1 GiB still fits comfortably.
+  #
+  # We allocate FH only: pusch_buffer_size and hest_buffer_size are set to 0
+  # (e3sm_shm_writer.cpp:191-196), so unlike cuBB there are no PUSCH/HEST regions
+  # after the FH pair.
+  #
+  # Do NOT hardcode the row count anywhere downstream — read num_fh_rows from the
+  # header. The dApp's RX-link drop accounting used to assume 16 rows, which was
+  # wrong here AND wrong against Aerial's 120, and manufactured a steady ~17%
+  # phantom loss.
+  #
+  # Too small is loud, not silent: under one row per buffer, open() fails with
+  # "SHM size N too small for one row".
+
+  # bf16 -> fp16 scale, applied when converting the resource grid to the row.
+  # Was the E3_CBF16_SCALE environment variable; it lives here now because the
+  # gNB-side publish helper needs the SAME value (pushed down via e3_shm_cfg),
+  # and a disagreement would produce different rows with no error at all —
+  # bf16 and fp16 are both 2 bytes, so a wrong scale is silently wrong data.
+  #
+  # Must be > 0. Zero or negative zeroes the row and breaks the dApp silently.
+  cbf16_scale: 1.0
+
+  # Which process converts the grid and writes the fp16 rows.
+  #
+  # EXACTLY ONE may write. Both this controller and the gNB-side publish helper
+  # keep their own ring cursor, so if both were active they would overwrite each
+  # other's rows with no error at all. This switch makes that impossible rather
+  # than a convention: in `gnb` mode the controller's writer hard-refuses.
+  #
+  #   controller  today's path -- the codelet copies the grid into the jbpf ring
+  #               and this process converts it. Works against any gNB.
+  #
+  #   gnb         publish-direct -- the codelet calls the gNB-side helper, which
+  #               converts and writes the row in the PHY RX thread. The jbpf ring
+  #               then carries only a ~64 B descriptor and this process never
+  #               touches the data plane. Halves total memory traffic, but
+  #               REQUIRES a gNB with the E3 helpers registered and the
+  #               descriptor-emitting codelet loaded.
+  #
+  # Either way the controller OWNS the region: it creates, sizes, zero-fills,
+  # headers and tears it down. The helper only attaches.
+  writer: gnb
+
+# ---------------------------------------------------------------------------
+# jbpf IPC. Must agree with the gNB's own `jbpf:` YAML section.
+# ---------------------------------------------------------------------------
+jbpf:
+  ipc_name:          e3_controller
+  run_path:          /dev/shm
+  mem_size_bytes:    1073741824
+  # LCM socket the gNB exposes for codelet loading.
+  #
+  # The gNB builds this path as <jbpf_run_path>/<jbpf_namespace>/<jbpf_lcm_ipc_name>
+  # from its own YAML, so with the usual
+  #   jbpf_run_path: "/dev/shm", jbpf_namespace: "jbpf", jbpf_lcm_ipc_name: "jbpf_lcm_ipc"
+  # it lands at /dev/shm/jbpf/jbpf_lcm_ipc — NOT /tmp.
+  #
+  # Leave this commented out and it is derived from run_path above, which keeps
+  # the two in step automatically. Set it only if your gNB uses a non-default
+  # namespace or socket name.
+  # lcm_socket_path: /dev/shm/jbpf/jbpf_lcm_ipc
+  # Directory holding the codeletsets. Resolved by the LCM load request, so it
+  # must be the path as seen by the gNB. Empty disables auto-loading.
+  codelet_base_path: /workspace/E3Controller/codelets
+
+# ---------------------------------------------------------------------------
+# E3 channel. One encoding is served at a time; dApps must speak the same one.
+# ASN.1 (APER) is the O-RAN default; JSON matches the cuBB convention the
+# adaptive_cpu dApp uses (with ports 5555/5556/5557).
+# ---------------------------------------------------------------------------
+e3:
+  # ASN.1 (APER). This file is the sibling of e3_controller.yaml, which serves
+  # JSON; keep every other key in the two identical so a json-vs-asn1 comparison
+  # measures the encoding and nothing else.
+  #
+  # The three ports below are NOT free parameters. The dApp's ASN.1 path builds a
+  # libe3 E3Agent in DAPP role and takes libe3's E3Config DEFAULTS
+  # (/usr/local/include/libe3/types.hpp:373-375):
+  #
+  #     setup_port{9990}   subscriber_port{9999}   publisher_port{9991}
+  #
+  # They are not read from the dApp's config/e3_config.json -- that file's ports
+  # (5555/5556/5557) belong to the JSON E3Manager path only. Change these and the
+  # dApp will not find the controller, with no error on either side: they simply
+  # sit on different ports and no indication ever arrives.
+  encoding:        asn1   # asn1 | json
+  link_layer:      zmq    # zmq | posix
+  transport:       tcp    # tcp | ipc | sctp
+  # Must match libe3's E3Config defaults -- see the note above.
+  setup_port:      9990   # libe3 E3Config default
+  publisher_port:  9991   # libe3 E3Config default
+  subscriber_port: 9999   # libe3 E3Config default
+
+# ---------------------------------------------------------------------------
+# Thread placement. -1 = no pinning (the poll thread then sleeps between polls
+# rather than busy-spinning).
+#
+# Pin these. Unpinned is not a neutral default here: it cost zmq_send 2.66 ->
+# 16.35 us and L2->L3 send 5.44 -> 19.52 us in back-to-back runs, because the
+# publisher loses socket/cache locality. It does NOT help the outbound queue
+# wait (53.32 vs 52.31 us either way) -- that one is set by the poller's period
+# in libe3's lockfree_queue.hpp, not by placement.
+#
+# Cores must exist in the pod's cpuset or pinning fails outright; check with
+#   grep Cpus_allowed_list /proc/self/status
+# Values below are for ocudu-e3-rusim, whose cpuset is the ODD cores 9..31.
+# Keep them disjoint from the dApp's, which are set separately in
+# run_scripts/start_adaptive_cpu.sh (CORES=). The srsran-janus-dpdk-x86 pod had
+# the EVEN map and wanted 38/40/42 instead.
+# ---------------------------------------------------------------------------
+threads:
+  poll_core:        28
+  worker_core:      30
+  publisher_core:   32
+  poll_interval_us: 100
+
+logging:
+  # Throttled drop-accounting CSV. Empty disables it.
+  #
+  # One cumulative row per second: uptime, published, dropped_total,
+  # latrec_clamped, and a column per drop reason (no_subscribers,
+  # ran_published_nothing, blob_too_small, ...). The drop COUNTERS themselves are
+  # always on: the throttled live stderr line and the shutdown summary do not
+  # depend on this path.
+  #
+  # This is the only file the L1-KPM SM writes. The per-slot stage CSV that used
+  # to live here is gone: it opened an ofstream, wrote a row and flushed it once
+  # per slot inside the sample handler, so the numbers it produced included the
+  # cost of producing them. Stage timing is latrec's job now.
+  drops_log_path: "/tmp/e3c_drops.csv"
+
+  # Per-slot stage CSV for the LEGACY eCPRI SM (RF=1) only. Empty disables it.
+  spectrum_stats_log_path: ""
+
+  # Where latrec writes its per-thread stage-record rings.
+  #
+  # PLACEMENT ONLY, not a switch. Whether anything is recorded at all is decided
+  # when libe3 is built, by -DLIBE3_ENABLE_LATREC (./build.sh --latrec); a normal
+  # build has no recorder in the process and ignores this. Empty leaves libe3's
+  # compiled-in default (/tmp/latrec unless the build overrode it).
+  #
+  # Rings default to 2^18 records, 8 MiB per thread. The slot path writes five
+  # records per published slot, so at 2000 slots/s that is ~26 s before the ring
+  # wraps -- and a wrapped capture is not a valid measurement. Raise it with
+  # LATREC_ENTRIES_LOG2_E3CONTROLLER_L1_KPM=24 (512 MiB, ~28 min); ceiling 2^28.
+  latrec_dir: ""
+target_slot: -1

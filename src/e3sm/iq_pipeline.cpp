@@ -165,12 +165,16 @@ libe3::ErrorCode IqPipeline::start() {
     }
 
     // Register the dispatcher stream LAST so we only start receiving once
-    // the worker is alive. Buffer release is handled by the dispatcher.
+    // the worker is alive. defer_release=true → we own the jbpf ring
+    // buffers from the moment they land here; the worker releases each
+    // after the consumer fan-out (zero-copy path — no 8 KB memcpy on the
+    // poll thread).
     dispatcher_.register_stream(
         ecpri_iq_stream_id_,
         [this](struct jbpf_io_stream_id* sid, void** bufs, int n) {
             process_buffers(sid, bufs, n);
-        });
+        },
+        /*defer_release=*/true);
 
     return libe3::ErrorCode::SUCCESS;
 }
@@ -184,6 +188,19 @@ void IqPipeline::stop() {
     running_.store(false, std::memory_order_release);
     if (worker_.joinable()) {
         worker_.join();
+    }
+
+    // The worker may have exited (running_=false) with buffers still queued.
+    // We own them (defer_release=true), so release any it didn't reach BEFORE
+    // unload_codelets() tears down the channel/mempool below. The worker has
+    // joined, so this is the only thread touching the queue now.
+    {
+        const uint64_t head = queue_head_.load(std::memory_order_relaxed);
+        uint64_t       tail = queue_tail_.load(std::memory_order_relaxed);
+        for (; tail != head; ++tail) {
+            jbpf_io_channel_release_buf(queue_[tail & (QUEUE_CAPACITY - 1)].buf);
+        }
+        queue_tail_.store(head, std::memory_order_relaxed);
     }
 
     const uint64_t dropped = dropped_.load(std::memory_order_relaxed);
@@ -220,37 +237,56 @@ void IqPipeline::process_buffers(struct jbpf_io_stream_id* /*stream_id*/,
     }
 
     // One "now" for the whole batch — saves a syscall per buffer.
+    // CLOCK_REALTIME ns matches the codelet's sample.codelet_ts_ns clock
+    // domain so consumers can subtract them for codelet_to_dispatch_us.
+    struct timespec dispatch_ts;
+    clock_gettime(CLOCK_REALTIME, &dispatch_ts);
+    const uint64_t dispatch_ts_ns =
+        static_cast<uint64_t>(dispatch_ts.tv_sec) * 1000000000ULL +
+        static_cast<uint64_t>(dispatch_ts.tv_nsec);
     const uint32_t now_us = static_cast<uint32_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count()
-        & 0x7FFFFFFFULL);
+        (dispatch_ts_ns / 1000ULL) & 0x7FFFFFFFULL);
 
     for (int i = 0; i < num_bufs; i++) {
         auto* sample = static_cast<struct iq_sample_data*>(bufs[i]);
 
         // Direction filter (1 = UL); num_prbu filter (drop SRS/PRACH/control).
-        if (sample->direction != 1) continue;
-        if (config_.expected_num_prbu > 0
-            && sample->num_prbu != config_.expected_num_prbu) continue;
+        // defer_release=true means we own the buffer even for filter-drops -
+        // release it right away so the jbpf ring slot goes back into circulation.
+        if (sample->direction != 1
+            || (config_.expected_num_prbu > 0
+                && sample->num_prbu != config_.expected_num_prbu)) {
+            jbpf_io_channel_release_buf(bufs[i]);
+            continue;
+        }
 
         // SPSC enqueue. Single producer, so head_ is relaxed; tail_ acquire
         // makes the worker's progress visible to our capacity check.
         const uint64_t head = queue_head_.load(std::memory_order_relaxed);
         const uint64_t tail = queue_tail_.load(std::memory_order_acquire);
         if (head - tail >= QUEUE_CAPACITY) {
+            // Queue full: worker will never see this buffer, so release it here
+            // ourselves to avoid leaking the jbpf ring slot.
             dropped_.fetch_add(1, std::memory_order_relaxed);
+            jbpf_io_channel_release_buf(bufs[i]);
             continue;
         }
 
+        // Option A: enqueue the buffer POINTER (zero-copy) - no 8 KB memcpy.
+        // The worker reads sample fields straight from the jbpf ring and releases
+        // it after the consumer fan-out.
         QueueEntry& slot = queue_[head & (QUEUE_CAPACITY - 1)];
-        std::memcpy(&slot.sample, sample, sizeof(*sample));
+        slot.buf = bufs[i];
         const uint32_t codelet_us = static_cast<uint32_t>(sample->timestamp);
-        slot.recv_us = (codelet_us > 0) ? ((now_us - codelet_us) & 0x7FFFFFFFu) : 0;
-        slot.sample_id = ++total_samples_received_;
+        slot.recv_us        = (codelet_us > 0) ? ((now_us - codelet_us) & 0x7FFFFFFFu) : 0;
+        slot.dispatch_ts_ns = dispatch_ts_ns;
+        slot.sample_id      = ++total_samples_received_;
 
         queue_head_.store(head + 1, std::memory_order_release);
     }
-    // Buffer release stays with the dispatcher — do NOT release here.
+    // We own the buffers (defer_release=true): enqueued ones are released by the
+    // worker after fan-out, dropped/filtered ones were released above. So the
+    // dispatcher must NOT release here - and it won't (defer_release).
 }
 
 void IqPipeline::worker_loop() {
@@ -264,7 +300,11 @@ void IqPipeline::worker_loop() {
             continue;
         }
 
-        dispatch_sample(queue_[tail & (QUEUE_CAPACITY - 1)]);
+        QueueEntry& entry = queue_[tail & (QUEUE_CAPACITY - 1)];
+        dispatch_sample(entry);
+        // Consumers are synchronous, so the jbpf buffer is safe to release now.
+        // We own it (defer_release=true) - release exactly once per enqueued slot.
+        jbpf_io_channel_release_buf(entry.buf);
 
         queue_tail_.store(tail + 1, std::memory_order_release);
     }
@@ -272,7 +312,9 @@ void IqPipeline::worker_loop() {
 
 void IqPipeline::dispatch_sample(const QueueEntry& entry) {
     using clock = std::chrono::steady_clock;
-    const auto& sample = entry.sample;
+    // entry.buf points straight at the jbpf ring buffer (Option A, zero-copy).
+    // Valid until the worker releases it right after this fan-out returns.
+    const auto& sample = *static_cast<const struct iq_sample_data*>(entry.buf);
 
     const auto t_decompress_start = clock::now();
     if (!e3sm_spectrum::decompress_bfp_9bit(
@@ -292,6 +334,9 @@ void IqPipeline::dispatch_sample(const QueueEntry& entry) {
     dec.decompressed_size = decompressed_buf_.size();
     dec.recv_us = entry.recv_us;
     dec.sample_id = entry.sample_id;
+    dec.gnb_ts_ns      = sample.gnb_ts_ns;
+    dec.codelet_ts_ns  = sample.codelet_ts_ns;
+    dec.dispatch_ts_ns = entry.dispatch_ts_ns;
     dec.decompress_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         t_decompress_end - t_decompress_start).count();
 
