@@ -18,11 +18,7 @@
 CODELETS_DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 E3_ROOT      := $(patsubst %/,%,$(dir $(CODELETS_DIR)))
 
-# ---- jbpf (the E3Controller submodule; built by build.sh into $(E3_ROOT)/out) ----
-JBPF_DIR     ?= $(E3_ROOT)/jbpf
-JBPF_OUT_DIR ?= $(E3_ROOT)/out
-
-# ---- ocudu: source of truth for the hook context contract ----
+# ---- ocudu: source of truth for the hook context contract, and for jbpf ----
 # The ctx structs are defined by the hook PRODUCER, so ocudu owns them. We put
 # its headers on the include path rather than keeping a copy here. Three
 # byte-identical copies of jbpf_srsran_contexts.h used to float around the
@@ -31,6 +27,12 @@ JBPF_OUT_DIR ?= $(E3_ROOT)/out
 OCUDU_DIR       ?= $(E3_ROOT)/../ocudu-e3
 OCUDU_JANUS_INC ?= $(OCUDU_DIR)/include/ocudu/janus
 OCUDU_SPECS_INC ?= $(OCUDU_DIR)/ocudu_janus/verifier/specs
+
+# ---- jbpf: ocudu's external/jbpf, the tree the gNB that loads these codelets is
+# built from (see the top-level CMakeLists.txt). Its generated headers land in
+# $(E3_ROOT)/out, where the controller's cmake build puts them. ----
+JBPF_DIR     ?= $(OCUDU_DIR)/external/jbpf
+JBPF_OUT_DIR ?= $(E3_ROOT)/out
 
 # Local import target for environments without an ocudu checkout (e.g. a build
 # container). `make import-contract` populates it; `make check-contract` fails
@@ -45,9 +47,11 @@ E3_VERIFIER ?= $(JBPF_OUT_DIR)/bin/e3_verifier_cli
 # with `$(MAKE) -C <codelet dir>`, so a relative override like
 # `make OCUDU_DIR=../ocudu-e3` would otherwise be re-resolved against each
 # subdirectory's CWD and silently fail to find the contract.
+#
+# OCUDU_DIR first: JBPF_DIR defaults to a path under it.
+override OCUDU_DIR      := $(abspath $(OCUDU_DIR))
 override JBPF_DIR       := $(abspath $(JBPF_DIR))
 override JBPF_OUT_DIR   := $(abspath $(JBPF_OUT_DIR))
-override OCUDU_DIR      := $(abspath $(OCUDU_DIR))
 override OCUDU_JANUS_INC := $(abspath $(OCUDU_JANUS_INC))
 override OCUDU_SPECS_INC := $(abspath $(OCUDU_SPECS_INC))
 override E3_VERIFIER    := $(abspath $(E3_VERIFIER))
@@ -134,10 +138,10 @@ check-env:
 		echo "ERROR: jbpf sources not found at JBPF_DIR=$(JBPF_DIR)" >&2; \
 		echo "       Expected $(JBPF_DIR)/src/common/jbpf_defs.h" >&2; \
 		if [ -d "$(JBPF_DIR)" ] && [ -z "$$(ls -A $(JBPF_DIR) 2>/dev/null)" ]; then \
-			echo "       That directory is EMPTY — the submodule is not checked out:" >&2; \
-			echo "         git -C $(E3_ROOT) submodule update --init --recursive" >&2; \
+			echo "       That directory is EMPTY — ocudu's jbpf submodule is not checked out:" >&2; \
+			echo "         git -C $(OCUDU_DIR) submodule update --init --recursive external/jbpf" >&2; \
 		else \
-			echo "       Override it:  make JBPF_DIR=/path/to/jbpf" >&2; \
+			echo "       Point OCUDU_DIR at the ocudu checkout:  make OCUDU_DIR=/path/to/ocudu" >&2; \
 		fi; \
 		echo "       Run 'make show-config' to see every resolved path." >&2; \
 		exit 1; \

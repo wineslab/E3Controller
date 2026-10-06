@@ -25,33 +25,64 @@ file(MAKE_DIRECTORY ${OUTPUT_DIR})
 file(MAKE_DIRECTORY ${OUTPUT_DIR}/inc)
 file(MAKE_DIRECTORY ${OUTPUT_DIR}/lib)
 
-# ---- Build jbpf (full build) ----
+# ---- ocudu checkout ----
+# The gNB this controller talks to is built from an ocudu checkout, and two things
+# come from it: the jbpf tree (below) and the hook context contract the codelets
+# and the verifier read (include/ocudu/janus). Clone it next to this repository,
+# or point OCUDU_DIR at it.
+set(OCUDU_DIR "${CMAKE_SOURCE_DIR}/../ocudu-e3"
+    CACHE PATH "Path to the ocudu checkout the gNB is built from")
+get_filename_component(OCUDU_DIR "${OCUDU_DIR}" ABSOLUTE)
+
+# ---- jbpf: the gNB's own tree ----
+# The controller is the jbpf IPC primary and the gNB the secondary. Both map one
+# shared region and exchange one channel and message format, so they must be
+# built from the SAME jbpf. Instead of pinning a second copy here and keeping the
+# two pins, and their patches, in step by hand, build against ocudu's
+# external/jbpf: the tree the gNB is built from. Its patches are ocudu's too
+# (ocudu apply_jbpf_patches.sh; build.sh runs it).
+#
+# Pass -DJBPF_DIR only to build against a different jbpf on purpose.
+if(NOT JBPF_DIR)
+  set(JBPF_DIR "${OCUDU_DIR}/external/jbpf")
+endif()
+get_filename_component(JBPF_DIR "${JBPF_DIR}" ABSOLUTE)
+
+if(NOT EXISTS "${JBPF_DIR}/CMakeLists.txt")
+  message(FATAL_ERROR
+    "jbpf not found at JBPF_DIR='${JBPF_DIR}'.\n"
+    "The controller builds against the gNB's jbpf (ocudu's external/jbpf). "
+    "Clone ocudu next to this repository, or pass -DOCUDU_DIR=/path/to/ocudu, "
+    "then populate and patch it:\n"
+    "  git -C <ocudu> submodule update --init --recursive external/jbpf\n"
+    "  <ocudu>/apply_jbpf_patches.sh")
+endif()
+
 # Disable tests and examples — we only need the libraries
 set(BUILD_TESTING OFF CACHE BOOL "Disable jbpf tests" FORCE)
 
 # Stop jbpf from re-initialising its own submodules.
 #
 # jbpf's CMakeLists.txt runs init_and_patch_submodules.sh when INITIALIZE_SUBMODULES
-# is ON, which is its default. That script `rm -rf`s and re-clones jbpf/3p/*, so on
-# any tree where git cannot resolve the submodules — a tarball, an `oc cp`/rsync
-# copy into a container, a git worktree — it DESTROYS the working 3p checkout and
-# then fails:
-#
-#   fatal: not a git repository
-#   cp: cannot create regular file '3p/ebpf-verifier/': Not a directory
-#
-# and the tree is left with ebpf-verifier and ubpf gone, so a plain re-configure
-# cannot recover. build.sh already populates the submodules itself
-# (jbpf/init_and_patch_submodules.sh), so there is nothing to gain from letting
-# jbpf redo it. ocudu forces the same value for the same reason
+# is ON, which is its default. That script `rm -rf`s and re-clones 3p/*, so on any
+# tree where git cannot resolve the submodules — a tarball, an `oc cp`/rsync copy
+# into a container — it DESTROYS the working 3p checkout and then fails. The tree
+# is ocudu's, populated and patched on ocudu's side, so there is nothing to gain
+# from letting jbpf redo it. ocudu forces the same value for the same reason
 # (ocudu CMakeLists.txt, the ENABLE_JBPF block).
 #
 # FORCE because it is a cached option in jbpf; without FORCE a stale ON from an
 # earlier configure would survive.
 set(INITIALIZE_SUBMODULES OFF CACHE BOOL "Let jbpf init its own submodules" FORCE)
 
-# Fail early and legibly if the submodules are genuinely absent, rather than
-# letting the first missing header surface hundreds of lines into the build.
+# Build jbpf with the options ocudu builds it with (ocudu CMakeLists.txt, the
+# ENABLE_JBPF block), so both ends of the IPC are the same jbpf in every respect,
+# not just the same commit.
+set(JBPF_STATIC ON CACHE BOOL "Build jbpf as static library" FORCE)
+set(JBPF_EXPERIMENTAL_FEATURES ON CACHE BOOL "Enable jbpf experimental features" FORCE)
+
+# Fail early and legibly if the 3p submodules are absent, rather than letting the
+# first missing header surface hundreds of lines into the build.
 #
 # A per-module sentinel FILE, one that module actually ships.
 #
@@ -67,18 +98,58 @@ set(_jbpf_3p_checks
   "mimalloc/CMakeLists.txt"
   "ck/configure")
 foreach(_jbpf_3p_file IN LISTS _jbpf_3p_checks)
-  if(NOT EXISTS "${CMAKE_SOURCE_DIR}/jbpf/3p/${_jbpf_3p_file}")
+  if(NOT EXISTS "${JBPF_DIR}/3p/${_jbpf_3p_file}")
     message(FATAL_ERROR
-      "jbpf/3p/${_jbpf_3p_file} is missing, so jbpf's third-party submodules are "
-      "not populated. jbpf's own auto-init is disabled here (see above, it would "
-      "destroy them), so populate them yourself:\n"
-      "  git submodule update --init --recursive   # then\n"
-      "  ./jbpf/init_and_patch_submodules.sh\n"
-      "or, for a copied tree with no git metadata, copy jbpf/ wholesale from a "
-      "working checkout.")
+      "${JBPF_DIR}/3p/${_jbpf_3p_file} is missing, so jbpf's third-party "
+      "submodules are not populated. jbpf's own auto-init is disabled here (see "
+      "above, it would destroy them), so populate them on the ocudu side:\n"
+      "  git -C ${OCUDU_DIR} submodule update --init --recursive external/jbpf\n"
+      "  ${OCUDU_DIR}/apply_jbpf_patches.sh")
   endif()
 endforeach()
 unset(_jbpf_3p_checks)
+
+# Say which jbpf this is, and whether it is the one ocudu pins. A jbpf checked
+# out at another commit than ocudu's gitlink would build a gNB and a controller
+# that disagree, so warn rather than let that surface as an IPC failure.
+execute_process(COMMAND git -C "${JBPF_DIR}" rev-parse HEAD
+                OUTPUT_VARIABLE _jbpf_rev OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET RESULT_VARIABLE _jbpf_rev_rc)
+execute_process(COMMAND git -C "${OCUDU_DIR}" rev-parse HEAD:external/jbpf
+                OUTPUT_VARIABLE _jbpf_pin OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET RESULT_VARIABLE _jbpf_pin_rc)
+if(NOT _jbpf_rev_rc EQUAL 0)
+  set(_jbpf_rev "unknown (not a git checkout)")
+endif()
+if(_jbpf_rev_rc EQUAL 0 AND _jbpf_pin_rc EQUAL 0 AND NOT _jbpf_rev STREQUAL _jbpf_pin)
+  message(WARNING
+    "jbpf at ${JBPF_DIR} is at ${_jbpf_rev}, but ocudu pins external/jbpf at "
+    "${_jbpf_pin}. The gNB and the controller must be built from the same jbpf:\n"
+    "  git -C ${OCUDU_DIR} submodule update --init --recursive external/jbpf")
+endif()
+
+# The gNB stamps gnb_ts_ns with CLOCK_MONOTONIC, and the codelet's stamps come from
+# jbpf_time_get_ns(), which is only monotonic with ocudu's
+# jbpf_patches/jbpf_monotonic_time.patch applied. The controller does not run
+# codelets, so this build does not need it, but a gNB built from this same tree
+# would produce stage intervals that mix two clocks. Upstream jbpf calls
+# clock_gettime exactly once in that file, with CLOCK_REALTIME.
+file(STRINGS "${JBPF_DIR}/src/core/jbpf_helper_impl.c" _jbpf_mono
+     REGEX "clock_gettime\\(CLOCK_MONOTONIC")
+if(_jbpf_mono)
+  set(_jbpf_clock "monotonic patch applied")
+else()
+  set(_jbpf_clock "monotonic patch NOT applied")
+  message(WARNING
+    "jbpf at ${JBPF_DIR} lacks jbpf_monotonic_time.patch, so a gNB built from it "
+    "stamps codelet_ts_ns with CLOCK_REALTIME while gnb_ts_ns is CLOCK_MONOTONIC. "
+    "Apply it on the ocudu side:  ${OCUDU_DIR}/apply_jbpf_patches.sh")
+endif()
+message(STATUS "jbpf: ${JBPF_DIR} @ ${_jbpf_rev} (${_jbpf_clock})")
+unset(_jbpf_rev)
+unset(_jbpf_pin)
+unset(_jbpf_mono)
+unset(_jbpf_clock)
 
 # Override add_test and set_tests_properties so jbpf subdir doesn't register tests
 macro(add_test)
@@ -86,7 +157,14 @@ endmacro()
 macro(set_tests_properties)
 endmacro()
 
-add_subdirectory(jbpf)
+# JBPF_DIR is outside this source tree, so add_subdirectory needs an explicit
+# binary directory. jbpf writes its libraries and copied headers under
+# ${CMAKE_SOURCE_DIR}/out (this project's out/). Two things still land in ocudu's
+# tree, as they do in ocudu's own build: libck, which jbpf builds in-source in
+# 3p/ck, and src/common/jbpf_version.h, which it regenerates on every build (build
+# parameters as strings only). Do not build ocudu and the controller at the same
+# time from one checkout.
+add_subdirectory("${JBPF_DIR}" "${CMAKE_BINARY_DIR}/jbpf")
 
 # Restore original cmake commands
 unset(add_test)
@@ -100,10 +178,7 @@ unset(set_tests_properties)
 #
 # It needs ocudu's janus headers, which define the hook context structs — the
 # verifier derives its ctx descriptors from them with offsetof() so the
-# contract has a single source of truth. Point OCUDU_DIR elsewhere if your
-# checkout is not a sibling of this one.
-set(OCUDU_DIR "${CMAKE_SOURCE_DIR}/../ocudu-e3"
-    CACHE PATH "Path to the ocudu-e3 checkout (hook context contract)")
+# contract has a single source of truth. They come from OCUDU_DIR (above).
 set(OCUDU_JANUS_INC "${OCUDU_DIR}/include/ocudu/janus")
 add_subdirectory(codelets/verifier)
 
@@ -208,12 +283,12 @@ target_include_directories(e3_controller PRIVATE
   ${CMAKE_BINARY_DIR}/generated        # libe3_stamp.h
   ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_SOURCE_DIR}/src
-  ${CMAKE_SOURCE_DIR}/jbpf/src/io
-  ${CMAKE_SOURCE_DIR}/jbpf/src/mem_mgmt
-  ${CMAKE_SOURCE_DIR}/jbpf/src/logger
-  ${CMAKE_SOURCE_DIR}/jbpf/src/common
+  ${JBPF_DIR}/src/io
+  ${JBPF_DIR}/src/mem_mgmt
+  ${JBPF_DIR}/src/logger
+  ${JBPF_DIR}/src/common
   ${OUTPUT_DIR}/inc
-  ${CMAKE_SOURCE_DIR}/jbpf/src/lcm
+  ${JBPF_DIR}/src/lcm
 )
 
 # Link against jbpf_io (transitively brings mem_mgmt, logger, ck, mimalloc)

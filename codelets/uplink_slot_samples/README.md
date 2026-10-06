@@ -85,7 +85,7 @@ invariant rather than a local choice:
 | site | file |
 |---|---|
 | `gnb_ts_ns` | `lib/phy/upper/upper_phy_rx_symbol_handler_impl.cpp` |
-| `codelet_ts_ns`, via `jbpf_time_get_ns()` | `jbpf/src/core/jbpf_helper_impl.c` — **local patch**, see `jbpf_monotonic_time.patch` |
+| `codelet_ts_ns`, via `jbpf_time_get_ns()` | ocudu `external/jbpf/src/core/jbpf_helper_impl.c` — **local patch**, see ocudu's `jbpf_patches/jbpf_monotonic_time.patch` |
 | `dispatch_ts_ns` | `E3Controller/src/e3sm/slot_iq_pipeline.cpp` |
 | handler entry | `E3Controller/src/e3sm/l1_kpm/e3sm_layer_1.cpp` |
 | the dApp's arrival age | `adaptive_cpu/subcarrier_power_app.cpp` (`now_mono_ns`) |
