@@ -10,9 +10,14 @@ thread pinning — lives in a single YAML configuration file; see [Usage](#usage
 
 ## Build
 
-Everything goes through the top-level [`build.sh`](build.sh). Two modes:
+Everything goes through the top-level [`build.sh`](build.sh). The controller is
+built against the gNB's own jbpf, so clone [ocudu-e3](https://github.com/wineslab/ocudu-e3)
+next to it first (see [jbpf comes from ocudu](#jbpf-comes-from-ocudu)). Two modes:
 
 ```bash
+git clone --branch e3 https://github.com/wineslab/ocudu-e3.git
+git -C ocudu-e3 submodule update --init --recursive external/jbpf
+
 git clone --recurse-submodules git@github.com:wineslab/E3Controller.git
 cd E3Controller
 
@@ -56,16 +61,16 @@ packages by hand and re-run `./build.sh` without `--install-deps`.
 
 Whether or not `--install-deps` was used, `build.sh` then runs:
 
-1. `git submodule update --init --recursive` (fetches libe3 and jbpf at their
-   pinned commits).
-2. `jbpf/init_and_patch_submodules.sh` for jbpf's third-party dependencies, then
-   `apply_jbpf_patches.sh` for the patches to jbpf's own core.
+1. `git submodule update --init --recursive` (fetches libe3 at its pinned tag).
+2. Checks that ocudu's `external/jbpf` and its third-party submodules are
+   populated, then runs ocudu's `apply_jbpf_patches.sh` over them. That script
+   is idempotent, so on a tree the gNB build already patched it does nothing.
 3. Configure + build libe3 with both encoders
    (`-DLIBE3_ENABLE_ASN1=ON -DLIBE3_ENABLE_JSON=ON -DLIBE3_BUILD_EXAMPLES=OFF
    -DLIBE3_BUILD_TESTS=OFF`), then `sudo cmake --install libe3/build` to
    `/usr/local`.
-4. Configure + build the E3Controller and the recording-cost bench; jbpf is
-   compiled in-tree via `add_subdirectory`.
+4. Configure + build the E3Controller and the recording-cost bench; ocudu's
+   jbpf is compiled into this build tree via `add_subdirectory`.
 
 `e3.encoding` in the config is therefore a pure runtime choice, because libe3 is built
 with both encoders.
@@ -90,6 +95,12 @@ behaviour of an installed public header.
 
 ### Overrides & re-runs
 
+- `OCUDU_DIR=/path/to/ocudu ./build.sh` — the ocudu checkout to take jbpf and
+  the hook contract from (defaults to `../ocudu-e3`; a relative path is taken
+  from this repository's root).
+- `LIBE3_PREFIX=$HOME/.local ./build.sh` — install libe3 there instead of
+  `/usr/local`, without `sudo`, and build the controller against it. For hosts
+  where you are not root.
 - `JOBS=N ./build.sh` — parallelism (defaults to `nproc`).
 - `E3C_CMAKE_ARGS='-DUSE_NATIVE=OFF' ./build.sh` — extra configure flags for
   the controller. CI passes exactly this: `-march=native` is right on a
@@ -99,6 +110,30 @@ behaviour of an installed public header.
 - If you re-build without `--install-deps` on a host where the earlier run
   put `asn1c` under `/opt/asn1c/`, the script re-adds `/opt/asn1c/bin` to
   `PATH` automatically before invoking `cmake`.
+
+### jbpf comes from ocudu
+
+The controller is the jbpf IPC primary and the gNB the secondary. Both map one
+shared region and exchange one channel and message format, so they must be built
+from the same jbpf. This repository therefore has no jbpf of its own: it builds
+against `${OCUDU_DIR}/external/jbpf`, the tree the gNB is built from, with the
+options ocudu uses (`JBPF_STATIC=ON`, `JBPF_EXPERIMENTAL_FEATURES=ON`). The
+patches to that tree belong to ocudu too (`jbpf_patches/`, applied by its
+`apply_jbpf_patches.sh`).
+
+Configure reports which jbpf it found, and warns when:
+
+- that jbpf is at a different commit than the one ocudu pins, or
+- it lacks `jbpf_monotonic_time.patch`. The controller does not need the patch
+  itself, but a gNB built from the same tree would stamp `codelet_ts_ns` with
+  `CLOCK_REALTIME` while `gnb_ts_ns` is `CLOCK_MONOTONIC`.
+
+jbpf builds `libck` inside its own source tree (`3p/ck`), as it does in ocudu's
+build, so do not build ocudu and the controller at the same time from one
+checkout. Run one after the other.
+
+The codelet Makefiles follow the same rule: `JBPF_DIR` defaults to
+`$(OCUDU_DIR)/external/jbpf`.
 
 ### ASN.1 Code Generation
 
@@ -308,7 +343,7 @@ nothing yet copied, and `codelet_ts_ns` just before the codelet submits. So the
 controller replays them rather than the RAN keeping a ring of its own.
 
 That works because the whole chain reads `CLOCK_MONOTONIC` — the gNB hook,
-`jbpf_time_get_ns()` (see `jbpf_patches/jbpf_monotonic_time.patch`) and the
+`jbpf_time_get_ns()` (see ocudu's `jbpf_patches/jbpf_monotonic_time.patch`) and the
 dispatcher poll — which is latrec's own clock. No domain conversion, no offset
 arithmetic, no rate skew to absorb. **All of those sites have to agree**; if one
 drifts back to `CLOCK_REALTIME` the stage intervals silently mix epochs.
