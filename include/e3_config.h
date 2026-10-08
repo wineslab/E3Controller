@@ -168,6 +168,13 @@ struct LoggingConfig {
      * when libe3 is built, by -DLIBE3_ENABLE_LATREC (./build.sh --latrec). A
      * build without it ignores this entirely. */
     std::string latrec_dir;
+
+    /* When true, delete stale <role>.<tid>.latrec files in the latrec directory
+     * (latrec_dir, or the libe3 default) on startup, so each run begins from a
+     * clean capture. Safe because the controller is the jbpf IPC primary and
+     * starts before the gNB/dApp, so this clears the whole pipeline's rings
+     * before they are recreated. Default off: unset leaves behaviour unchanged. */
+    bool latrec_fresh = false;
 };
 
 struct ControllerConfig {

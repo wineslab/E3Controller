@@ -282,12 +282,14 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
         /* ---- logging ---- */
         if (const auto n = root["logging"]) {
             if (!check_keys(n, "logging",
-                            {"drops_log_path", "spectrum_stats_log_path", "latrec_dir"}, err)) {
+                            {"drops_log_path", "spectrum_stats_log_path", "latrec_dir",
+                             "latrec_fresh"}, err)) {
                 return false;
             }
             get(n, "drops_log_path", out.logging.drops_log_path);
             get(n, "spectrum_stats_log_path", out.logging.spectrum_stats_log_path);
             get(n, "latrec_dir", out.logging.latrec_dir);
+            get(n, "latrec_fresh", out.logging.latrec_fresh);
         }
 
         get(root, "target_slot", out.target_slot);

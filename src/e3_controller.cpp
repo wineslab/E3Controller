@@ -24,6 +24,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <getopt.h>
+#include <dirent.h>
 #include <atomic>
 #include <pthread.h>
 #include <sched.h>
@@ -203,6 +204,31 @@ static void report_libe3_provenance()
     }
 }
 
+/* Remove stale "<role>.<tid>.latrec" rings from `dir` so a run starts from a
+ * clean capture (gated by logging.latrec_fresh). Only touches files ending in
+ * ".latrec"; a missing directory is a no-op and any unlink error is skipped.
+ * Must run before any ring is opened -- see the call site in main(). */
+static void latrec_wipe_stale(const char* dir)
+{
+    DIR* d = ::opendir(dir);
+    if (!d) {
+        return;  // directory not there yet -> nothing to wipe
+    }
+    int removed = 0;
+    for (struct dirent* e; (e = ::readdir(d)) != nullptr;) {
+        const std::size_t n = std::strlen(e->d_name);
+        if (n > 7 && std::strcmp(e->d_name + n - 7, ".latrec") == 0) {
+            const std::string path = std::string(dir) + "/" + e->d_name;
+            if (::unlink(path.c_str()) == 0) {
+                ++removed;
+            }
+        }
+    }
+    ::closedir(d);
+    std::fprintf(stderr, "[E3Controller] latrec_fresh: wiped %d stale ring(s) in %s\n",
+                 removed, dir);
+}
+
 int main(int argc, char** argv)
 {
     report_libe3_provenance();
@@ -237,6 +263,15 @@ int main(int argc, char** argv)
      * one: the directory is read at each ring open, and both libe3's agent
      * threads and our own pipeline worker open theirs as they start up. A no-op
      * in a build without the recorder, so it is unconditional. */
+    if (config.logging.latrec_fresh) {
+        /* Wipe stale rings before anything opens one. Runs here (before our own
+         * and libe3's threads open their rings, and before the gNB/dApp start,
+         * since the controller is the IPC primary) so the whole pipeline begins
+         * from a clean capture -- replaces the manual pre-run `rm /tmp/latrec/*`. */
+        latrec_wipe_stale(config.logging.latrec_dir.empty()
+                              ? LATREC_DEFAULT_DIR
+                              : config.logging.latrec_dir.c_str());
+    }
     if (!config.logging.latrec_dir.empty()) {
         latrec_set_output_dir(config.logging.latrec_dir.c_str());
     }
