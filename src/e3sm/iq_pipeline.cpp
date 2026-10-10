@@ -146,6 +146,12 @@ libe3::ErrorCode IqPipeline::start() {
         codelets_loaded_ = true;
     }
 
+    // A freshly loaded codelet has zeroed maps: send the PRB filter config
+    // again after every load, not once per process (stop() unloads the
+    // codelet on the last unsubscribe, so a dApp restart reloads it). The
+    // stream is unregistered here, so process_buffers() is not running.
+    prb_config_sent_ = false;
+
     // Mark running BEFORE spawning the worker so its first iteration sees the flag.
     running_.store(true, std::memory_order_release);
 

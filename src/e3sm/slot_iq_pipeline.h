@@ -277,7 +277,9 @@ private:
         0x90, 0xfe, 0xdc, 0xba, 0x09, 0x87, 0x65, 0x4c
     };
 
-    /* e3_shm_cfg delivered? Retried on every buffer batch until it lands. */
+    /* e3_shm_cfg + e3_slot_sel delivered to the CURRENT codelet load? Retried
+     * on every buffer batch until they land; reset by start(), because each
+     * load starts with zeroed maps. */
     bool shm_cfg_sent_{false};
 
     struct jbpf_io_stream_id slot_iq_stream_id_ {

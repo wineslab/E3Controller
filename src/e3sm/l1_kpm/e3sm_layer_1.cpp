@@ -185,6 +185,12 @@ libe3::ErrorCode E3SMLayer1::start() {
     // generous.
     encoded_buf_.reserve(1024);
 
+    // One-shot warnings are per session, not per process: each start() loads
+    // a new codelet, and a helper that publishes nothing after a dApp restart
+    // must be as visible as it is on the first start.
+    truncated_warned_   = false;
+    writer_mode_warned_ = false;
+
     // Lazy pipeline boot: codelet load via LCM IPC + worker thread spawn
     // only happen here. libe3 calls start() on first L1-KPM subscription,
     // so the LCM IPC socket (exposed by srsRAN) is guaranteed to be up

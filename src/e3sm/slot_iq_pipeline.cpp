@@ -135,6 +135,15 @@ libe3::ErrorCode SlotIqPipeline::start() {
         codelets_loaded_ = true;
     }
 
+    /* A freshly loaded codelet starts with zeroed maps, so the selector it
+     * cached from the previous load is gone and the helper would refuse every
+     * slot (version 0). Send e3_shm_cfg + e3_slot_sel again on the first batch,
+     * after every load, not once per process: stop() unloads the codelet on the
+     * last unsubscribe, so a dApp restart lands here with a new codelet. The
+     * helper's attach is idempotent for the same epoch. Safe without a lock:
+     * the stream is unregistered, so process_buffers() cannot be running. */
+    shm_cfg_sent_ = false;
+
     running_.store(true, std::memory_order_release);
 
     worker_ = std::thread([this] { worker_loop(); });
