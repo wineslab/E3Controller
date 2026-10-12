@@ -83,7 +83,7 @@ shm:
   # bf16 and fp16 are both 2 bytes, so a wrong scale is silently wrong data.
   #
   # Must be > 0. Zero or negative zeroes the row and breaks the dApp silently.
-  cbf16_scale: 1.0
+  cbf16_scale: 20.0
 
   # Which process converts the grid and writes the fp16 rows.
   #
@@ -168,9 +168,9 @@ e3:
 # the EVEN map and wanted 38/40/42 instead.
 # ---------------------------------------------------------------------------
 threads:
-  poll_core:        28
-  worker_core:      30
-  publisher_core:   32
+  poll_core:        25
+  worker_core:      27
+  publisher_core:   29
   poll_interval_us: 100
 
 logging:
@@ -203,4 +203,5 @@ logging:
   # wraps -- and a wrapped capture is not a valid measurement. Raise it with
   # LATREC_ENTRIES_LOG2_E3CONTROLLER_L1_KPM=24 (512 MiB, ~28 min); ceiling 2^28.
   latrec_dir: ""
+  latrec_fresh: true    # wipe stale *.latrec on controller start (fresh capture)
 target_slot: -1
