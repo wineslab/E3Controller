@@ -28,6 +28,18 @@ set(ASN1_SOURCES
 )
 set(ASN1C_STAMP "${ASN1C_OUTPUT_DIR}/.asn1c_stamp")
 
+# Only our SM type-specific generated files. asn1c emits one .c per top-level
+# type definition; both modules share the same constraint-table / per-codec
+# routines via the libe3 runtime.
+set(ASN1C_SRCS
+    "${ASN1C_OUTPUT_DIR}/Spectrum-IQDataIndication.c"
+    "${ASN1C_OUTPUT_DIR}/Spectrum-PRBBlacklistControl.c"
+    "${ASN1C_OUTPUT_DIR}/Spectrum-RanFunctionData.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-ShmRef.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-Indication.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-RanFunctionData.c"
+)
+
 # Generate ASN.1 C code at configure time, then remove runtime files
 # to avoid conflicts with libe3's runtime.
 if(NOT EXISTS "${ASN1C_STAMP}")
@@ -76,22 +88,15 @@ add_custom_command(
     # Remove runtime files, keep only Spectrum-* and L1KPM-* types
     COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/cleanup_asn1c.cmake
     COMMAND ${CMAKE_COMMAND} -E touch ${ASN1C_STAMP}
+    # Declared so CMake knows they come from here: a type added to an .asn
+    # (a new .c in the list) then regenerates in an existing build dir
+    # instead of failing with "Cannot find source file".
+    BYPRODUCTS ${ASN1C_SRCS}
     DEPENDS ${ASN1_SOURCES}
     COMMENT "Generating ASN.1 C code from e3sm_spectrum.asn + e3sm_layer1.asn (types only)"
 )
 
 add_custom_target(asn1c_generate DEPENDS ${ASN1C_STAMP})
-
-# Only our SM type-specific generated files. asn1c emits one .c per top-level
-# type definition; both modules share the same constraint-table / per-codec
-# routines via the libe3 runtime.
-set(ASN1C_SRCS
-    "${ASN1C_OUTPUT_DIR}/Spectrum-IQDataIndication.c"
-    "${ASN1C_OUTPUT_DIR}/Spectrum-PRBBlacklistControl.c"
-    "${ASN1C_OUTPUT_DIR}/Spectrum-RanFunctionData.c"
-    "${ASN1C_OUTPUT_DIR}/L1KPM-ShmRef.c"
-    "${ASN1C_OUTPUT_DIR}/L1KPM-Indication.c"
-)
 
 # Spectrum-ConfigControl is generated (it stays in the grammar for wire
 # compatibility) but deliberately NOT compiled: it is the only type that uses

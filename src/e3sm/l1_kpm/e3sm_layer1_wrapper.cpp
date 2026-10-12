@@ -19,7 +19,7 @@ extern "C" {
 
 #include "L1KPM-ShmRef.h"
 #include "L1KPM-Indication.h"
-#include "Spectrum-RanFunctionData.h"
+#include "L1KPM-RanFunctionData.h"
 #include "aper_encoder.h"
 
 #ifdef __cplusplus
@@ -96,10 +96,10 @@ bool encode_iq_indication_aper(uint64_t timestamp_ns,
 
 bool encode_ran_function_data_aper(std::vector<uint8_t>& out)
 {
-    // Reuses Spectrum-RanFunctionData on the wire — same {name, version,
-    // description} SEQUENCE — so the dApp decodes both SMs' RFD with one
-    // schema, but with layer1's own strings.
-    Spectrum_RanFunctionData_t rfd;
+    // L1KPM-RanFunctionData: {name, version, description}, the same shape and
+    // constraints as Spectrum-RanFunctionData, so a decoder of one reads the
+    // other; only the strings differ per SM.
+    L1KPM_RanFunctionData_t rfd;
     std::memset(&rfd, 0, sizeof(rfd));
 
     const char* name = LAYER1_RAN_FUNCTION_NAME;
@@ -121,7 +121,7 @@ bool encode_ran_function_data_aper(std::vector<uint8_t>& out)
 
     uint8_t buffer[256];
     asn_enc_rval_t ret = aper_encode_to_buffer(
-        &asn_DEF_Spectrum_RanFunctionData, nullptr, &rfd, buffer, sizeof(buffer));
+        &asn_DEF_L1KPM_RanFunctionData, nullptr, &rfd, buffer, sizeof(buffer));
 
     bool ok = (ret.encoded != -1);
     if (ok) {
@@ -136,7 +136,8 @@ bool encode_ran_function_data_aper(std::vector<uint8_t>& out)
 
 bool encode_ran_function_data_json(std::vector<uint8_t>& out)
 {
-    nlohmann::json j = {
+    // ordered_json keeps the ASN.1 field order; plain json would sort the keys.
+    nlohmann::ordered_json j = {
         {"name",        LAYER1_RAN_FUNCTION_NAME},
         {"version",     LAYER1_RAN_FUNCTION_VERSION},
         {"description", LAYER1_RAN_FUNCTION_DESCRIPTION},

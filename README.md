@@ -108,6 +108,9 @@ The build automatically:
 2. Compiles the generated code into a static library (`e3sm_asn`) linked to `e3_controller`
 
 Generated files go into `build/asn1c_generated/` and are **not** tracked in git.
+asn1c writes one `.c` per type. When you add a type to an `.asn`, add its `.c` to
+`ASN1C_SRCS` in `src/e3sm/asn/CMakeLists.txt`; an existing build folder then
+regenerates on the next build.
 
 ## Usage
 
@@ -577,11 +580,11 @@ data-plane pipelines at the `src/e3sm/` root and the ASN.1 grammars in `asn/`.
 | `src/e3sm/sm_spectrum/e3sm_spect_wrapper.{h,cpp}` | C++ wrappers around the Spectrum ASN.1 types (incl. PRB blacklist control decode) |
 | `src/e3sm/l1_kpm/e3sm_layer_1.{h,cpp}` | L1-KPM SM (RF=2) — SHM-pointer IQ indications in the configured encoding (JSON or APER) via SlotIqPipeline; writes the optional per-slot stats CSV |
 | `src/e3sm/l1_kpm/e3sm_layer1_json.{h,cpp}` | JSON encoder for the L1-KPM (RF=2) indication — `e3sm_layer1::encode_iq_indication_json`, NVIDIA-Aerial-conformant `protocolData` |
-| `src/e3sm/l1_kpm/e3sm_layer1_wrapper.{h,cpp}` | APER encoder for `L1KPM-Indication` + layer-1 RanFunctionData (JSON & APER twins) |
+| `src/e3sm/l1_kpm/e3sm_layer1_wrapper.{h,cpp}` | APER encoder for `L1KPM-Indication`, and the L1-KPM RanFunctionData: `L1KPM-RanFunctionData` over APER, the same fields as a JSON object over JSON |
 | `src/e3sm/utils/e3sm_shm_writer.{h,cpp}` | POSIX shm writer for `/e3_ran_buffers` — owned by `E3SMLayer1` |
 | `src/e3sm/utils/bfp_decompress.{h,cpp}` | BFP-9 → int16 IQ decompression — called from `IqPipeline::dispatch_sample` |
 | `src/e3sm/asn/e3sm_spectrum.asn` | ASN.1 definitions for Spectrum SM (`Spectrum-IQDataIndication`, `Spectrum-PRBBlacklistControl`, `Spectrum-RanFunctionData`, `Spectrum-ConfigControl`) |
-| `src/e3sm/asn/e3sm_layer1.asn` | ASN.1 definitions for L1-KPM SM (`L1KPM-ShmRef`, `L1KPM-Indication`) — module `L1-KPM-SM`; derived from NVIDIA's E3 schema |
+| `src/e3sm/asn/e3sm_layer1.asn` | ASN.1 definitions for L1-KPM SM (`L1KPM-ShmRef`, `L1KPM-Indication`, `L1KPM-RanFunctionData`) — module `L1-KPM-SM`; derived from NVIDIA's E3 schema; the same grammar as OAI's L1-KPM SM (`e3sm_l1_kpm.asn`) |
 
 ## Attribution
 
@@ -600,16 +603,35 @@ Source schema (Apache-2.0, `Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES`)
 - [e3_message_examples.json](https://github.com/NVIDIA/aerial-sample-apps/blob/main/dapps/docs/e3_message_examples.json)
 
 
-**Deviations (out of scope for this release):** `cell_id` / `n_rx_ant` are
-`OPTIONAL` in `e3sm_layer1.asn` but omitted from the JSON path today (the codelet
-doesn't surface them); 
+**Deviations (out of scope for this release):** `cellId` (`cell_id`) and
+`validSymbolMask` (`valid_symbol_mask`) are `OPTIONAL` in `e3sm_layer1.asn` and
+not sent yet, in either encoding: the codelet does not surface the cell id, and
+the mask needs the TDD pattern. `nRxAnt` (`n_rx_ant`) is sent in both. A dApp
+that reads the JSON mask should treat a missing one as `0x3FFF` (all symbols).
 
-<!-- `setupResponse.ranFunctionList[].ranFunctionData` is a
-descriptive `{name, version, description}` object rather than NVIDIA's array of
-stream descriptors. See [`docs/nvidia/README.md`](docs/nvidia/README.md). -->
+**ASN.1 grammar change.** `validSymbolMask` is a new `OPTIONAL` field, so every
+APER `L1KPM-Indication` carries one more presence bit, even when the field is
+absent. A dApp built on the previous `e3sm_layer1.asn` misreads the new
+indications: rebuild it with this grammar. JSON is not affected.
 
 The **RF=1 Spectrum** service model (PRB-blacklist / spectrum sharing) is
 wineslab's own and is not part of NVIDIA's schema.
+
+### RAN function data (RF=2)
+
+The setup response describes RF=2 with `L1KPM-RanFunctionData`
+(`name`, `version`, `description`), with the same values as OAI's L1-KPM SM:
+
+| Encoding | `ranFunctionData` bytes |
+|---|---|
+| `asn1` | APER `L1KPM-RanFunctionData` |
+| `json` | `{"name":"L1-KPM","version":1,"description":"L1-KPM SM: post-FFT IQ telemetry."}`, the same fields in the ASN.1 order, byte-for-byte what OAI sends |
+
+libe3 0.2.x writes `ranFunctionData` as a hex string of these bytes in a JSON
+setup response; with [wineslab/libe3#118](https://github.com/wineslab/libe3/pull/118)
+it nests the object as JSON. NVIDIA's schema has an array of stream descriptors
+here instead ([wineslab/libe3#86](https://github.com/wineslab/libe3/issues/86));
+the Aerial dApps only print the field, so either form works with them.
 
 ## Known Limitations
 
