@@ -40,6 +40,7 @@ bool encode_iq_indication_aper(uint64_t timestamp_ns,
                                uint8_t fh_buffer_index,
                                uint32_t fh_write_index,
                                uint16_t nof_ports,
+                               uint16_t valid_symbol_mask,
                                std::vector<uint8_t>& out)
 {
     L1KPM_Indication_t ind;
@@ -77,6 +78,11 @@ bool encode_iq_indication_aper(uint64_t timestamp_ns,
         ind.nRxAnt = static_cast<long*>(std::calloc(1, sizeof(long)));
         if (ind.nRxAnt) *ind.nRxAnt = static_cast<long>(nof_ports);
     }
+
+    // validSymbolMask: the gNB's uplink symbols of this slot, INTEGER (0..16383).
+    // Always set, like OAI's encoder; 0 is valid (no uplink symbol).
+    ind.validSymbolMask = static_cast<long*>(std::calloc(1, sizeof(long)));
+    if (ind.validSymbolMask) *ind.validSymbolMask = static_cast<long>(valid_symbol_mask & 0x3FFFu);
 
     // Buffer sizing: payload is small (≈80 bytes including shm_name); 256 is
     // comfortable headroom and matches the existing Spectrum encoders.

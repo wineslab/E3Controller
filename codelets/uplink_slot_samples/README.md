@@ -27,6 +27,7 @@ codelet reads through.
 | `sfn`, `subframe_id`, `slot_id` | slot identity (`slot_id` = index within the 10 ms frame) |
 | `ctx_id` | sector |
 | `nof_ports`, `nof_symbols`, `nof_subcarriers` | grid shape for THIS slot |
+| `valid_symbol_mask` | bit s = 1 if symbol s is uplink per the gNB's TDD pattern; 0 for DL and guard symbols of a mixed slot; all bits set on FDD |
 
 The grid is `nof_ports x nof_symbols x nof_subcarriers` × `cbf16_t` (4 B), laid
 out `[port][symbol][subcarrier]`. For the 4×4 / 273 PRB / 30 kHz configuration
@@ -48,6 +49,10 @@ compared at configure time; a divergence would make the two writers disagree wit
 | `flags` | `E3_SLOT_FLAG_TRUNCATED` when the helper refused rather than writing a partial row |
 | `sfn`, `subframe_id`, `slot_id`, `sector_id` | slot identity |
 | `nof_ports`, `nof_symbols`, `nof_subcarriers` | grid shape, so the controller can validate against its config |
+| `valid_symbol_mask` | copied through from the ctx; the controller sends it to the dApp as `validSymbolMask` |
+
+The row always holds every symbol of the slot. The mask only says which ones are real uplink, so a dApp can
+skip the DL and guard symbols of a mixed slot (they carry no uplink).
 
 ## 3. The timestamps — and the one that is easy to misread
 

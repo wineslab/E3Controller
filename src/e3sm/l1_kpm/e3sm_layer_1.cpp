@@ -417,10 +417,10 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     const bool encoded_ok = want_json
         ? e3sm_layer1::encode_iq_indication_json(
               s.gnb_ts_ns, s.sfn, abs_slot, shm_name_,
-              fh_buf_idx, fh_write_idx, ports_clamped, encoded_buf_)
+              fh_buf_idx, fh_write_idx, ports_clamped, s.valid_symbol_mask, encoded_buf_)
         : e3sm_layer1::encode_iq_indication_aper(
               s.gnb_ts_ns, s.sfn, abs_slot, shm_name_,
-              fh_buf_idx, fh_write_idx, ports_clamped, encoded_buf_);
+              fh_buf_idx, fh_write_idx, ports_clamped, s.valid_symbol_mask, encoded_buf_);
 
     if (!encoded_ok) {
         std::fprintf(stderr,

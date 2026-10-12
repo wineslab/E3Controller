@@ -21,10 +21,10 @@
  *
  * The shm reference fields (shm_name, fh_buffer_index, fh_write_index) are
  * passed unconditionally — encode_iq_indication_aper populates iqSamplesRef
- * for every indication, matching the JSON path's behavior. cellId and
- * validSymbolMask are not emitted yet (they'd be wired from the codelet's
- * metadata and the TDD config when we surface them); leaving them
- * OPTIONAL-absent costs only one preamble bit each.
+ * for every indication, matching the JSON path's behavior. nRxAnt and
+ * validSymbolMask (the gNB's uplink symbols of the slot) are always set.
+ * cellId is not emitted yet (the codelet does not surface it); leaving it
+ * OPTIONAL-absent costs only one preamble bit.
  */
 #pragma once
 
@@ -64,6 +64,8 @@ namespace e3sm_layer1 {
 //                  back so the dApp can sanity-check against its own mmap.
 // fh_buffer_*    = ring-buffer coordinates the dApp uses to address the row.
 // nof_ports      = number of RX antennas in the shm row (emitted as nRxAnt).
+// valid_symbol_mask = bit s set = symbol s is uplink per the gNB's TDD pattern
+//                  (emitted as validSymbolMask; DL/guard symbols are 0).
 bool encode_iq_indication_aper(uint64_t timestamp_ns,
                                uint16_t sfn,
                                uint16_t slot,
@@ -71,6 +73,7 @@ bool encode_iq_indication_aper(uint64_t timestamp_ns,
                                uint8_t fh_buffer_index,
                                uint32_t fh_write_index,
                                uint16_t nof_ports,
+                               uint16_t valid_symbol_mask,
                                std::vector<uint8_t>& out);
 
 // Encode the Layer-1 SM's descriptive RanFunctionData as

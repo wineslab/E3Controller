@@ -377,6 +377,7 @@ void SlotIqPipeline::dispatch_sample(const QueueEntry& entry) {
     sample.nof_ports       = s.nof_ports;
     sample.nof_symbols     = s.nof_symbols;
     sample.nof_subcarriers = s.nof_subcarriers;
+    sample.valid_symbol_mask = s.valid_symbol_mask;
 
     /* No IQ on this path. The gNB-side helper already wrote the fp16 row into
      * /e3_ran_buffers; the descriptor says where. E3SMLayer1 forwards these

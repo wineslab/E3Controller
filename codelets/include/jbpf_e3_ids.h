@@ -64,7 +64,7 @@
  *   JBPF_PROG_TYPE_RAN_GENERIC    = CUSTOM_PROGRAM_START_ID + 3
  *
  * The per-slot upper-PHY hook needs its own program type, because its ctx
- * (struct jbpf_ran_slot_ctx, 47 B) is larger than jbpf_ran_ofh_ctx (27 B).
+ * (struct jbpf_ran_slot_ctx, 49 B) is larger than jbpf_ran_ofh_ctx (27 B).
  * Declaring the slot codelet as SEC("jbpf_ran_ofh") is exactly why
  * verification currently fails with "Upper bound must be at most 27".
  *

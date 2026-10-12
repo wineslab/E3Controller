@@ -177,7 +177,13 @@ struct e3_slot_desc {
     uint16_t nof_symbols;
     uint16_t nof_subcarriers;
 
-    uint8_t  reserved[6];
+    /* Bit s set = symbol s is uplink per the gNB's TDD pattern (copied from
+     * jbpf_ran_slot_ctx). DL and guard symbols of a mixed slot are 0; all
+     * nof_symbols bits are set on FDD. The row still holds every symbol: the
+     * mask only says which ones carry real uplink. */
+    uint16_t valid_symbol_mask;
+
+    uint8_t  reserved[4];
 };
 
 /* No ladder rung matched the observed grid, so nothing was published. Set
