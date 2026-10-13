@@ -1,7 +1,8 @@
 # e3_verifier_cli — offline PREVAIL verifier for E3Controller's codelets.
 #
-# Replaces the SDK image's srsran_verifier_cli. Built from the jbpf submodule's
-# verifier library, plus the E3 program-type and helper registrations.
+# Replaces the SDK image's srsran_verifier_cli. Built from the verifier library
+# of ocudu's jbpf (JBPF_DIR, set in the top-level CMakeLists.txt), plus the E3
+# program-type and helper registrations.
 #
 # Needs ocudu's janus headers for the ctx struct definitions: the context
 # descriptors are derived with offsetof() from the RAN's own header rather than
@@ -20,7 +21,7 @@ add_executable(e3_verifier_cli e3_verifier_cli.cpp)
 
 target_link_libraries(e3_verifier_cli PRIVATE jbpf::verifier_lib)
 
-set(_e3v_jbpf "${CMAKE_CURRENT_SOURCE_DIR}/../../jbpf")
+set(_e3v_jbpf "${JBPF_DIR}")
 target_include_directories(e3_verifier_cli PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include   # jbpf_e3_ids.h
   ${OCUDU_JANUS_INC}                       # jbpf_srsran_contexts.h (contract)

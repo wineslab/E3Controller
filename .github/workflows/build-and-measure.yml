@@ -21,8 +21,8 @@ jobs:
   build:
     name: build (latrec=${{ matrix.latrec }})
     runs-on: ubuntu-latest
-    # Cold, this is asn1c-from-source + libe3 + jbpf and its third-party tree +
-    # the controller. Comfortably inside an hour; nowhere near the 6h default.
+    # Cold, this is asn1c-from-source + libe3 + ocudu's jbpf and its third-party
+    # tree + the controller. Comfortably inside an hour; nowhere near the 6h default.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -32,10 +32,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # build.sh fetches the submodules itself and then runs jbpf's
-          # init_and_patch_submodules.sh over them. Letting the checkout action
-          # do it first would hand that patch script a tree it did not lay out.
+          # build.sh fetches the libe3 submodule itself.
           submodules: false
+
+      # jbpf is not vendored here: the controller is built against the gNB's own
+      # jbpf, ocudu's external/jbpf, so the two ends of the IPC are always the
+      # same jbpf. CI takes it from the public ocudu mirror. Only that submodule
+      # is fetched; the rest of ocudu is not needed to build the controller.
+      - name: Check out ocudu (for its jbpf and hook contract)
+        uses: actions/checkout@v4
+        with:
+          repository: wineslab/ocudu-e3
+          ref: e3
+          path: .deps/ocudu-e3
+          fetch-depth: 1
+          submodules: false
+
+      - name: Populate ocudu's jbpf
+        run: git -C .deps/ocudu-e3 submodule update --init --recursive --depth 1 external/jbpf
 
       # The libe3 pin decides which asn1c revision is wanted, so it belongs in
       # the cache key. hashFiles cannot read a gitlink, and the submodule is not
@@ -69,6 +83,7 @@ jobs:
           # which breaks both ccache reuse across heterogeneous runners and any
           # comparison of the measurements below between runs.
           E3C_CMAKE_ARGS: -DUSE_NATIVE=OFF
+          OCUDU_DIR: ${{ github.workspace }}/.deps/ocudu-e3
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ccache
@@ -89,6 +104,7 @@ jobs:
             echo "nproc: $(nproc)"
             echo "/dev/shm: $(df -h /dev/shm | tail -1)"
             echo "libe3 pin: $(git -C libe3 rev-parse --short HEAD) ($(cat libe3/VERSION))"
+            echo "ocudu-e3: $(git -C .deps/ocudu-e3 rev-parse --short HEAD), jbpf pin: $(git -C .deps/ocudu-e3 rev-parse --short HEAD:external/jbpf)"
             echo '```'
           } > report.md
 

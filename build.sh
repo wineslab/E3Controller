@@ -2,8 +2,8 @@
 #
 # One-shot build for the E3Controller.
 #
-# Build order (libe3 depends on nothing in-tree; the controller depends on a
-# system-installed libe3 + an in-tree jbpf):
+# Build order (libe3 depends on nothing in-tree; the controller depends on an
+# installed libe3 + the gNB's jbpf, from the ocudu checkout next to this one):
 #
 #   0. (optional, --install-deps) install system packages. This step delegates
 #      to libe3's own `libe3/build_libe3 -I`, which does an apt install of the
@@ -11,11 +11,12 @@
 #      the mouse07410 fork into /opt/asn1c so the file list libe3's E3AP
 #      grammar expects is produced. We also apt-install a small set of extras
 #      the E3Controller itself needs (python + pip for jbpf's build).
-#   1. fetch submodules (libe3 @ pinned tag, jbpf)
-#   2. init + patch jbpf's own 3p submodules, then apply our patch to jbpf core
-#   3. configure libe3, stage asn1c's BOOLEAN.* skeletons (toolchain workaround),
-#      then build + INSTALL to /usr/local (both encoders -> runtime --encoding)
-#   4. build the E3Controller (jbpf is built in-tree via add_subdirectory)
+#   1. fetch the libe3 submodule (pinned tag)
+#   2. check that ocudu's external/jbpf is populated, then run ocudu's
+#      apply_jbpf_patches.sh over it (idempotent: a no-op on a patched tree)
+#   3. configure libe3, then build + INSTALL it (to /usr/local, or LIBE3_PREFIX)
+#      with both encoders, so the encoding is a runtime choice
+#   4. build the E3Controller (ocudu's jbpf is built via add_subdirectory)
 #
 # Usage: ./build.sh [--install-deps] [--latrec]
 #   --install-deps   Install all system packages before building. Debian/Ubuntu
@@ -30,8 +31,17 @@
 #                    build. Set LATREC_DEFAULT_DIR=<path> alongside it to move
 #                    the compiled-in default ring directory off /tmp/latrec.
 #
-# Override parallelism with JOBS=<n> ./build.sh.
-# Extra configure flags for the controller: E3C_CMAKE_ARGS='-DUSE_NATIVE=OFF'.
+# Environment:
+#   OCUDU_DIR=<path>     The ocudu checkout the gNB is built from (default
+#                        ../ocudu-e3, relative to this repository). Its
+#                        external/jbpf is the jbpf this build uses, and its
+#                        include/ocudu/janus the hook contract.
+#   LIBE3_PREFIX=<path>  Install libe3 there instead of /usr/local, without sudo,
+#                        and build the controller against it. For hosts where
+#                        you are not root.
+#   JOBS=<n>             Parallelism (default: nproc).
+#   E3C_CMAKE_ARGS=...   Extra configure flags for the controller, e.g.
+#                        '-DUSE_NATIVE=OFF'.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -41,7 +51,7 @@ for arg in "$@"; do
   case "$arg" in
     --install-deps|-d) INSTALL_DEPS=1 ;;
     --latrec) ENABLE_LATREC=1 ;;
-    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,44p' "$0"; exit 0 ;;
     *) echo "ERROR: unknown argument '$arg'" >&2
        echo "Usage: $0 [--install-deps] [--latrec]" >&2
        exit 2 ;;
@@ -134,23 +144,55 @@ fi
 # ---------------------------------------------------------------------------
 # Step 1: submodules
 # ---------------------------------------------------------------------------
-echo "==> [1/4] Fetching submodules (libe3, jbpf)"
+echo "==> [1/4] Fetching submodules (libe3)"
 git submodule update --init --recursive
 
 # ---------------------------------------------------------------------------
-# Step 2: jbpf's own 3p submodules, then jbpf core
+# Step 2: the gNB's jbpf, from the ocudu checkout
 # ---------------------------------------------------------------------------
-echo "==> [2/4] Initialising + patching jbpf 3p submodules"
-( cd jbpf && bash ./init_and_patch_submodules.sh )
+# The controller (jbpf IPC primary) and the gNB (secondary) must be built from
+# the same jbpf, so this build uses ocudu's external/jbpf rather than a copy of
+# its own. ocudu owns that tree and its patches; we only check that it is there
+# and run ocudu's own, idempotent, patch script over it.
+# A relative OCUDU_DIR is taken from this repository's root (we cd'd there).
+OCUDU_DIR_IN="${OCUDU_DIR:-../ocudu-e3}"
+if ! OCUDU_DIR="$(cd "${OCUDU_DIR_IN}" 2>/dev/null && pwd)"; then
+  echo "ERROR: no ocudu checkout at OCUDU_DIR='${OCUDU_DIR_IN}'." >&2
+  echo "       Clone it next to this repository, or point OCUDU_DIR at it:" >&2
+  echo "         git clone --branch e3 https://github.com/wineslab/ocudu-e3.git ../ocudu-e3" >&2
+  echo "         OCUDU_DIR=/path/to/ocudu ./build.sh" >&2
+  exit 1
+fi
+JBPF_DIR="${OCUDU_DIR}/external/jbpf"
+echo "==> [2/4] Preparing the gNB's jbpf (${JBPF_DIR})"
 
-# Then our own patches against jbpf core, which that script knows nothing
-# about (it is upstream jbpf's, so edits to it are lost on re-clone).
-bash ./apply_jbpf_patches.sh
+# Same sentinels as CMakeLists.txt: one file each 3p module actually ships.
+for sentinel in CMakeLists.txt 3p/ubpf/CMakeLists.txt 3p/ebpf-verifier/CMakeLists.txt \
+                3p/mimalloc/CMakeLists.txt 3p/ck/configure; do
+  if [ ! -f "${JBPF_DIR}/${sentinel}" ]; then
+    echo "ERROR: ${JBPF_DIR}/${sentinel} is missing: ocudu's jbpf submodule is" >&2
+    echo "       not populated. On the ocudu side, run:" >&2
+    echo "         git -C ${OCUDU_DIR} submodule update --init --recursive external/jbpf" >&2
+    exit 1
+  fi
+done
+
+if [ ! -f "${OCUDU_DIR}/apply_jbpf_patches.sh" ]; then
+  echo "ERROR: ${OCUDU_DIR}/apply_jbpf_patches.sh not found; this ocudu checkout" >&2
+  echo "       predates the jbpf integration. Use the e3 branch." >&2
+  exit 1
+fi
+bash "${OCUDU_DIR}/apply_jbpf_patches.sh"
 
 # ---------------------------------------------------------------------------
 # Step 3: libe3
 # ---------------------------------------------------------------------------
-echo "==> [3/4] Building + installing libe3 (ASN.1 + JSON) to /usr/local"
+LIBE3_PREFIX="${LIBE3_PREFIX:-}"
+if [ -n "${LIBE3_PREFIX}" ]; then
+  mkdir -p "${LIBE3_PREFIX}"
+  LIBE3_PREFIX="$(cd "${LIBE3_PREFIX}" && pwd)"
+fi
+echo "==> [3/4] Building + installing libe3 (ASN.1 + JSON) to ${LIBE3_PREFIX:-/usr/local}"
 # JSON encoding needs nlohmann_json >= 3.11 on the system (libe3's floor); install
 # it (header-only) or let libe3's FetchContent fetch it when the host has internet.
 #
@@ -175,6 +217,9 @@ LIBE3_CMAKE_ARGS=(
   -DLIBE3_BUILD_EXAMPLES=OFF
   -DLIBE3_BUILD_TESTS=OFF
 )
+if [ -n "${LIBE3_PREFIX}" ]; then
+  LIBE3_CMAKE_ARGS+=( -DCMAKE_INSTALL_PREFIX="${LIBE3_PREFIX}" )
+fi
 if [ "$ENABLE_LATREC" -eq 1 ]; then
   echo "    latrec: ON (stage recorder compiled in)"
   LIBE3_CMAKE_ARGS+=( -DLIBE3_ENABLE_LATREC=ON )
@@ -198,7 +243,11 @@ cmake -S libe3 -B libe3/build "${LIBE3_CMAKE_ARGS[@]}"
 # reference skeletons on disk.
 
 cmake --build libe3/build -j"${JOBS}"
-$SUDO cmake --install libe3/build
+if [ -n "${LIBE3_PREFIX}" ]; then
+  cmake --install libe3/build
+else
+  $SUDO cmake --install libe3/build
+fi
 
 # ---------------------------------------------------------------------------
 # Step 4: E3Controller
@@ -208,8 +257,16 @@ echo "==> [4/4] Building E3Controller"
 # CI sets -DUSE_NATIVE=OFF: -march=native is right on a deployment host but wrong
 # for a measurement run on whatever CPU a shared runner happens to be, since it
 # makes numbers incomparable between runs.
+E3C_PREFIX_ARGS=()
+if [ -n "${LIBE3_PREFIX}" ]; then
+  # find_package(libe3) and the ASN.1 runtime headers (src/e3sm/asn) both have to
+  # look in the prefix, or they silently pick up an older libe3 in /usr/local.
+  E3C_PREFIX_ARGS+=( -DCMAKE_PREFIX_PATH="${LIBE3_PREFIX}"
+                     -DLIBE3_ASN1_INCLUDE_DIR="${LIBE3_PREFIX}/include/libe3/asn1" )
+fi
 # shellcheck disable=SC2086
-cmake -S . -B build -DINITIALIZE_SUBMODULES=OFF ${E3C_CMAKE_ARGS:-}
+cmake -S . -B build -DOCUDU_DIR="${OCUDU_DIR}" \
+  ${E3C_PREFIX_ARGS[@]+"${E3C_PREFIX_ARGS[@]}"} ${E3C_CMAKE_ARGS:-}
 cmake --build build -j"${JOBS}" --target e3_controller bench_stage_recording
 
 echo "==> Done: $(pwd)/out/bin/e3_controller"
