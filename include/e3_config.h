@@ -1,17 +1,6 @@
 /*
  * e3_config.h — E3Controller configuration, loaded from a single YAML file.
  *
- * Replaces the previous 20 command-line options. `--config <file>` is now the
- * only argument, deliberately: two configuration mechanisms invite the two to
- * disagree, and this file's whole job is to be the one place the radio geometry
- * is stated.
- *
- * WHY YAML rather than JSON (which would need no new dependency, since libe3
- * already pulls nlohmann): ocudu's own configuration is YAML, including the
- * `jbpf:` section this file must agree with. Keeping both sides in the same
- * language makes them diffable and reviewable together — which is the point,
- * because the controller/gNB geometry agreement is not otherwise enforced by
- * anything structural.
  */
 
 #ifndef E3_CONFIG_H

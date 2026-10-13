@@ -2,22 +2,13 @@
 #
 # This is the only argument the controller takes:  e3_controller --config <this file>
 #
-# Unknown keys are a startup ERROR, not a warning. A typo'd `nof_port:` that was
-# silently ignored would leave the controller sizing rows for the default while
-# you believed you had configured something else — which is the exact failure
-# this file exists to prevent.
+
 
 # ---------------------------------------------------------------------------
 # Radio geometry — MUST match the running gNB.
 #
-# Checked, not trusted: the controller compares these against the geometry the
-# RAN reports in the first slot (jbpf_ran_slot_ctx carries nof_ports /
-# nof_symbols / nof_subcarriers) and refuses to publish on a mismatch.
-#
 # The asymmetry worth knowing: declaring FEWER ports than the gNB sends is
-# already safe (the gNB-side helper refuses and the codelet flags it). Declaring
-# MORE is what needs the check — the surplus antennas get written as silence and
-# the dApp cannot tell them from a genuinely quiet antenna.
+# already safe (the gNB-side helper refuses and the codelet flags it).
 # ---------------------------------------------------------------------------
 radio:
   nof_ports:   4       # UL antenna ports (1..8)
@@ -50,7 +41,7 @@ shm:
   #
   # Sizing, from e3sm_shm_writer.cpp:176-187 — the region is a DOUBLE-buffered
   # ring, so rows-per-buffer = (size_bytes - sizeof(SharedMemoryHeader)) / 2 /
-  # row_bytes, and row_bytes for 4 ports x 273 PRB x 14 sym is 733,824 B.
+  # row_bytes, and row_bytes for 4 ports x 273 PRB (x 12 symbols) x 14 sym is 733,824 B.
   #
   #   1 GiB   -> 731 rows/buffer  (1462 total, ~2.2 s at 650 slots/s)
   #   168 MiB -> 120 rows/buffer  ( 240 total, ~370 ms)          <-- here, = Aerial
