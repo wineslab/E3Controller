@@ -49,6 +49,7 @@ wineslab's own and is not part of NVIDIA's schema.
 
 If you use the E3Controller, please reference the following paper:
 
-```
-Angelo Feraudo, Ravis Shirkhani, Stefano Maxenti, Andrea Lacava, Michele Polese, and Tommaso Melodia. 2026. Bringing dApps to OCUDU: An E3 Controller for Real-Time Open RAN Intelligence. In Proceedings of the 20th ACM Workshop on Wireless Network Testbeds, Experimental evaluation & Characterization (WiNTECH '26). Association for Computing Machinery, New York, NY, USA, 17–24. https://doi.org/10.1145/3831662.3844165
-```
+>Angelo Feraudo, Ravis Shirkhani, Stefano Maxenti, Andrea Lacava, Michele Polese, and Tommaso Melodia. 2026. 
+> <i>Bringing dApps to OCUDU: An E3 Controller for Real-Time Open RAN Intelligence. </i>
+>In Proceedings of the 20th ACM Workshop on Wireless Network Testbeds, Experimental evaluation & Characterization (WiNTECH '26). 
+> Association for Computing Machinery, New York, NY, USA, 17–24. https://doi.org/10.1145/3831662.3844165
