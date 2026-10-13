@@ -13,18 +13,29 @@ is in [Known limitations](known-limitations.md).
 ## L1-KPM (RF=2) and NVIDIA's schema
 
 The payload follows NVIDIA Aerial's public E3 message schema (see
-[Attribution](../README.md#attribution)), with these differences.
+[Attribution](../README.md#attribution)). How it fills the schema's fields:
 
-**Deviations (out of scope for this release):** `cellId` (`cell_id`) and
-`validSymbolMask` (`valid_symbol_mask`) are `OPTIONAL` in `e3sm_layer1.asn` and
-not sent yet, in either encoding: the codelet does not surface the cell id, and
-the mask needs the TDD pattern. `nRxAnt` (`n_rx_ant`) is sent in both. A dApp
-that reads the JSON mask should treat a missing one as `0x3FFF` (all symbols).
+**Uplink symbols (`validSymbolMask`).** Every indication carries
+`validSymbolMask` (`valid_symbol_mask` in JSON): bit s is 1 if symbol s of the
+slot is uplink, 0 for the DL and guard symbols of a mixed slot, all bits set on
+FDD. The gNB computes it from its TDD pattern when the slot hook fires, with the
+same call it uses to ask the RU for uplink symbols, and the codelet passes it
+through (see [`codelets/uplink_slot_samples/README.md`](../codelets/uplink_slot_samples/README.md)).
+The shared-memory row still holds all 14 symbols; the dApp uses the mask to skip
+the others, which carry no uplink. A dApp should treat a
+missing mask as `0x3FFF` (all symbols), which is what an older RAN sends.
+
+This is a contract change between the gNB and the codelets: `jbpf_ran_slot_ctx`
+grew from 47 to 49 bytes, so build both from matching trees.
+
+**Deviations (out of scope for this release):** `cellId` (`cell_id`) is
+`OPTIONAL` in `e3sm_layer1.asn` and not sent yet, in either encoding: the codelet
+does not surface the cell id. `nRxAnt` (`n_rx_ant`) is sent in both.
 
 **ASN.1 grammar change.** `validSymbolMask` is a new `OPTIONAL` field, so every
-APER `L1KPM-Indication` carries one more presence bit, even when the field is
-absent. A dApp built on the previous `e3sm_layer1.asn` misreads the new
-indications: rebuild it with this grammar. JSON is not affected.
+APER `L1KPM-Indication` carries one more presence bit. A dApp built on the
+previous `e3sm_layer1.asn` misreads the new indications: rebuild it with this
+grammar. JSON is not affected.
 
 ## RAN function data (RF=2)
 
