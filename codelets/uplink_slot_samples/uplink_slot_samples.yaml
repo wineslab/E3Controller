@@ -10,3 +10,17 @@ codelet_descriptor:
       - name: output_map
         stream_id: "7531abcd1234567890fedcba0987654a"
         forward_destination: DestinationNone
+    # Control input. The E3Controller builds the load request programmatically
+    # (src/e3sm/slot_iq_pipeline.cpp), so these are here for reference and for
+    # jbpf_lcm_cli users -- keep the names and stream ids in sync with both.
+    #
+    #   shm_in  e3_shm_cfg  -- where /e3_ran_buffers is and its row geometry, so
+    #                          the gNB-side publish helper can attach. Only sent
+    #                          in `writer: gnb` mode.
+    #   sel_in  e3_slot_sel -- temporal selector (which slots to publish).
+    #                          slot_mask == 0 means publish everything.
+    in_io_channel:
+      - name: shm_in
+        stream_id: "7531abcd1234567890fedcba0987654b"
+      - name: sel_in
+        stream_id: "7531abcd1234567890fedcba0987654c"

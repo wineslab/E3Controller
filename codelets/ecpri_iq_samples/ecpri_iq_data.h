@@ -10,7 +10,17 @@
 #define MAX_IQ_PAYLOAD_BYTES 8192
 
 struct iq_sample_data {
-    uint64_t timestamp;      /* Timestamp in nanoseconds */
+    /* gNB-side hand-off timestamp (CLOCK_REALTIME ns) stamped by the
+     * ocudu hook caller in ofh_message_receiver_impl::process_new_frame,
+     * right before hook_capture_xran_packet fires. The RAN anchor for
+     * RAN -> codelet latency on this pipeline. Same clock domain as
+     * codelet_ts_ns below and as jbpf_time_get_ns(). */
+    uint64_t gnb_ts_ns;
+    /* Codelet-side timestamp (jbpf_time_get_ns(), CLOCK_REALTIME ns)
+     * stamped just before jbpf_ringbuf_output. Subtract gnb_ts_ns to
+     * get gnb_to_codelet_us (hook -> codelet dispatch cost). */
+    uint64_t codelet_ts_ns;
+    uint64_t timestamp;      /* Codelet entry timestamp, us mod 2^31 (kept for ASN.1 IQDataIndication.timestamp) */
     uint8_t  direction;      /* 0=DL, 1=UL */
     uint8_t  frame_id;       /* 3GPP frame ID (0-255, wraps every 2.56s) */
     uint8_t  comp_method;    /* Compression method: 0=none, 1=BFP, 2=block scaling, 3=mu-law, 4=modulation */

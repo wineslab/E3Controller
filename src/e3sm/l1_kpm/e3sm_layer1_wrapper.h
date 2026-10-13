@@ -15,14 +15,16 @@
  *       sfn             INTEGER (0..65535),
  *       slot            INTEGER (0..65535),
  *       cellId          INTEGER (0..65535) OPTIONAL,
- *       nRxAnt          INTEGER (0..65535) OPTIONAL
+ *       nRxAnt          INTEGER (0..65535) OPTIONAL,
+ *       validSymbolMask INTEGER (0..16383) OPTIONAL
  *   }
  *
  * The shm reference fields (shm_name, fh_buffer_index, fh_write_index) are
  * passed unconditionally — encode_iq_indication_aper populates iqSamplesRef
- * for every indication, matching the JSON path's behavior. cellId / nRxAnt
- * are not emitted yet (they'd be wired from the codelet's eAxC metadata when
- * we surface them); leaving them OPTIONAL-absent costs only one preamble bit.
+ * for every indication, matching the JSON path's behavior. cellId and
+ * validSymbolMask are not emitted yet (they'd be wired from the codelet's
+ * metadata and the TDD config when we surface them); leaving them
+ * OPTIONAL-absent costs only one preamble bit each.
  */
 #pragma once
 
@@ -30,9 +32,24 @@
 #include <string>
 #include <vector>
 
-#define LAYER1_RAN_FUNCTION_NAME        "l1_kpm_sm"
-#define LAYER1_RAN_FUNCTION_DESCRIPTION "Layer-1 KPM service model: per-slot SHM-pointer IQ indications"
+/* RAN-function identity advertised at setup, the same values as OAI's L1-KPM
+ * SM (openair2/E3AP/service_models/l1_kpm_sm), so a dApp sees one SM whichever
+ * RAN serves it. Sizes are checked against L1KPM-RanFunctionData below. */
+#define LAYER1_RAN_FUNCTION_NAME        "L1-KPM"
+#define LAYER1_RAN_FUNCTION_DESCRIPTION "L1-KPM SM: post-FFT IQ telemetry."
 #define LAYER1_RAN_FUNCTION_VERSION     1
+
+/* L1KPM-RanFunctionData: name 1..32 bytes, version 0..65535, description
+ * 1..128 bytes. Checked at build time so the JSON form can never carry what
+ * the ASN.1 form would refuse. */
+static_assert(sizeof(LAYER1_RAN_FUNCTION_NAME) - 1 >= 1 &&
+              sizeof(LAYER1_RAN_FUNCTION_NAME) - 1 <= 32,
+              "LAYER1_RAN_FUNCTION_NAME must be 1..32 bytes (L1KPM-RanFunctionData.name)");
+static_assert(sizeof(LAYER1_RAN_FUNCTION_DESCRIPTION) - 1 >= 1 &&
+              sizeof(LAYER1_RAN_FUNCTION_DESCRIPTION) - 1 <= 128,
+              "LAYER1_RAN_FUNCTION_DESCRIPTION must be 1..128 bytes (L1KPM-RanFunctionData.description)");
+static_assert(LAYER1_RAN_FUNCTION_VERSION >= 0 && LAYER1_RAN_FUNCTION_VERSION <= 65535,
+              "LAYER1_RAN_FUNCTION_VERSION must be 0..65535 (L1KPM-RanFunctionData.version)");
 
 namespace e3sm_layer1 {
 
@@ -56,15 +73,17 @@ bool encode_iq_indication_aper(uint64_t timestamp_ns,
                                uint16_t nof_ports,
                                std::vector<uint8_t>& out);
 
-// Encode the Layer-1 SM's descriptive RanFunctionData. Uses the
-// Spectrum-RanFunctionData ASN.1 type for the wire shape (a name/version/
-// description SEQUENCE) so both SMs hit the same dApp-side decoder. Only
-// the string values differ.
+// Encode the Layer-1 SM's descriptive RanFunctionData as
+// L1KPM-RanFunctionData (a name/version/description SEQUENCE). Same shape
+// and constraints as Spectrum-RanFunctionData, so one dApp-side decoder
+// reads both SMs; only the string values differ.
 bool encode_ran_function_data_aper(std::vector<uint8_t>& out);
 
-// JSON twin of encode_ran_function_data_aper(). Emits {name, version,
-// description} as an inline JSON object for libe3's JsonE3Encoder to nest
-// inside ranFunctionList[].ranFunctionData.
+// JSON twin of encode_ran_function_data_aper(): the same three fields, in the
+// ASN.1 order, as one JSON object:
+//   {"name":"L1-KPM","version":1,"description":"L1-KPM SM: post-FFT IQ telemetry."}
+// Byte-identical to OAI's l1_kpm_enc.c. libe3 0.2.x writes ranFunctionData as
+// a hex string of these bytes; libe3 with wineslab/libe3#118 nests the object.
 bool encode_ran_function_data_json(std::vector<uint8_t>& out);
 
 }  // namespace e3sm_layer1
