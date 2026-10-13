@@ -6,7 +6,7 @@
  *     IqPipeline and emits Spectrum-IQDataIndication (APER) to subscribed dApps
  *     — this is what the public Spectrum Sharing dApp subscribes to.
  *   - PRB blacklist control (control id 1): decodes Spectrum-PRBBlacklistControl
- *     and ACKs (application to the RAN is still a stub — see README).
+ *     and ACKs (application to the RAN is still a stub — see docs/known-limitations.md).
  *   - SetupResponse RAN function descriptor (Spectrum-RanFunctionData).
  *
  * IQ-consuming SM pattern (mirrors E3SMLayer1): register a pipeline consumer at
@@ -15,7 +15,7 @@
  * BFP-9 decompression; this SM only FFT zero-pads, APER-encodes, and fans out.
  *
  * NOTE: handle_control_action currently ACKs and logs but does not apply the
- * blacklist to the RAN. See E3Controller/README.md "Known Limitations".
+ * blacklist to the RAN. See docs/known-limitations.md.
  */
 #ifndef E3_SM_SPECTRUM_H
 #define E3_SM_SPECTRUM_H

@@ -11,8 +11,7 @@
  * calling each consumer's callback in registration order on the same
  * DecompressedSample (passed by const reference — no copies). It does NOT
  * serve N dApps; that's the SM's job (each SM fans out to its subscribers
- * via emit_outbound). See the README's Known Limitations section for the
- * multi-consumer / multi-dApp explanation.
+ * via emit_outbound). See docs/architecture.md for the pipeline / SM split.
  *
  * Lifecycle: construct → register all consumers → start() → … → stop().
  * register_consumer() while running is undefined; consumers can't be

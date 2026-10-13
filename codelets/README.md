@@ -11,12 +11,18 @@ dependency on `jrtc-apps`.
 
 ## Build
 
-Prerequisites: `clang` with the BPF target, plus a built `e3_verifier_cli`
-(produced by the top-level `./build.sh`, from `codelets/verifier/`).
+Prerequisites: `clang` with the BPF target, a built `e3_verifier_cli`
+(`cmake --build build --target e3_verifier_cli` after the top-level `./build.sh`,
+from `codelets/verifier/`), and the ocudu checkout the gNB is built from. The
+jbpf headers come from its
+`external/jbpf` (`JBPF_DIR`, default `$(OCUDU_DIR)/external/jbpf`) and the hook
+contract from its `include/ocudu/janus`, so the codelets match the gNB that
+loads them.
 
 ```sh
 make                    # build + verify every codelet
 make verify             # re-verify existing objects
+make show-config        # resolved paths, [ok]/[MISSING] per include root
 make clean
 ```
 
@@ -31,13 +37,15 @@ make OCUDU_DIR=/path/to/ocudu-e3
 `make` fails if a codelet does not verify. That is deliberate, and it is not
 belt-and-braces: **the gNB never verifies codelets.** jbpf's load path is
 `ubpf_load_elf_ex` followed by `ubpf_compile`
-(`external/jbpf/src/core/jbpf.c:968,976`), PREVAIL is not on it, and ubpf's JIT
+(ocudu's `external/jbpf/src/core/jbpf.c:968,976`), PREVAIL is not on it, and ubpf's JIT
 emits no memory bounds checks at all — only its interpreter does, and jbpf uses
 the JIT. So this build step is the only memory-safety gate these codelets ever
 pass through, and an advisory one would be decorative.
 
-The verifier is `codelets/verifier/e3_verifier_cli.cpp`. It replaces the SDK
-image's `srsran_verifier_cli`, which models only `jbpf_ran_ofh_ctx` (27 bytes)
+The verifier is `codelets/verifier/e3_verifier_cli.cpp`. It registers the ocudu
+program types and the E3 helper prototypes on top of jbpf's built-ins, and derives
+its context descriptors with `offsetof` from ocudu's own header, so the contract
+has one source of truth. It replaces the SDK image's `srsran_verifier_cli`, which models only `jbpf_ran_ofh_ctx` (27 bytes)
 and therefore cannot verify the per-slot codelet at all — that is the origin of
 the `Upper bound must be at most 27` message.
 

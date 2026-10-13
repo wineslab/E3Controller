@@ -224,7 +224,7 @@ libe3::ErrorCode E3SMSpectrum::handle_control_action(
                 ctrl.sampling_threshold, ctrl.validity_period);
 
     // TODO: Apply the PRB blacklist to the RAN. Currently an ACK-and-log
-    // stub; flagged in README Known Limitations.
+    // stub; flagged in docs/known-limitations.md.
 
     auto ack = make_message_ack_pdu(request_message_id,
                                     libe3::ResponseCode::POSITIVE);
