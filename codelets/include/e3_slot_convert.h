@@ -26,7 +26,8 @@
  * which is why the caller validates it.
  *
  * The transform is bf16 -> fp32 (a 16-bit shift, free) -> x scale ->
- * fp32 -> fp16 (needs rounding + range clamp, hence F16C).
+ * fp32 -> fp16 (needs rounding + range clamp, hence F16C on x86 and the
+ * AdvSIMD FCVTN instruction on aarch64; both round to nearest-even).
  * ---------------------------------------------------------------------------
  */
 
@@ -38,6 +39,16 @@
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#endif
+
+/* The vector path this build uses. NEON is part of every aarch64 CPU, so it is
+ * always on there; E3_NO_NEON hides it, for the microbenchmark's scalar
+ * baseline. */
+#if defined(__AVX2__) && defined(__F16C__)
+#define E3_CONVERT_AVX2 1
+#elif defined(__aarch64__) && !defined(E3_NO_NEON)
+#define E3_CONVERT_NEON 1
+#include <arm_neon.h>
 #endif
 
 /*
@@ -56,11 +67,9 @@
  * E3_ALLOW_SCALAR_CONVERT to opt out (host tooling, non-x86, or the
  * microbenchmark's deliberate scalar baseline).
  */
-#if !defined(E3_ALLOW_SCALAR_CONVERT)
-#if !(defined(__AVX2__) && defined(__F16C__)) && !defined(__aarch64__)
-#error "e3_slot_convert.h: no vector path. Compile with -mavx2 -mf16c (or -march=native). \
+#if !defined(E3_ALLOW_SCALAR_CONVERT) && !defined(E3_CONVERT_AVX2) && !defined(E3_CONVERT_NEON)
+#error "e3_slot_convert.h: no vector path. Compile with -mavx2 -mf16c (or -march=native) on x86. \
 Define E3_ALLOW_SCALAR_CONVERT only if a scalar convert in the RX thread is genuinely acceptable."
-#endif
 #endif
 
 namespace e3_convert {
@@ -105,6 +114,15 @@ bf16_to_fp16_scalar(std::uint16_t bf16, float scale)
     __m128  ss = _mm_set_ss(u32.f * scale);
     __m128i ph = _mm_cvtps_ph(ss, _MM_FROUND_TO_NEAREST_INT);
     return static_cast<std::uint16_t>(_mm_extract_epi16(ph, 0));
+#elif defined(E3_CONVERT_NEON)
+    /* The same instruction as the vector path, so the two agree bit for bit. */
+    union {
+        std::uint32_t u;
+        float         f;
+    } u32;
+    u32.u               = static_cast<std::uint32_t>(bf16) << 16;
+    const float16x4_t h = vcvt_f16_f32(vdupq_n_f32(u32.f * scale));
+    return vget_lane_u16(vreinterpret_u16_f16(h), 0);
 #else
     union {
         std::uint32_t u;
@@ -153,13 +171,14 @@ bf16_to_fp16_scalar(std::uint16_t bf16, float scale)
 /*
  * Convert one antenna's worth of bf16 to fp16, applying `scale`.
  *
- * `n_u16` MUST be a multiple of 8 on the AVX2 path. For 273 PRB / 14 symbols it
- * is 91,728 = 8 * 11,466, so there is no tail; asserted by the caller.
+ * The vector paths take 8 samples per iteration; a remainder goes through the
+ * scalar function. For 273 PRB / 14 symbols n_u16 is 91,728 = 8 * 11,466, so
+ * there is no tail.
  */
 inline void
 convert_ant(std::uint16_t* dst, const std::uint16_t* src, std::size_t n_u16, float scale)
 {
-#if defined(__AVX2__) && defined(__F16C__)
+#if defined(E3_CONVERT_AVX2)
     /* 8 bf16 -> 8 fp16 per iteration:
      *   load 8 bf16 (16 B) -> zero-extend to 8x u32 -> shift left 16 (bf16
      *   promoted to fp32) -> multiply by scale -> cvtps_ph -> store 16 B. */
@@ -173,6 +192,25 @@ convert_ant(std::uint16_t* dst, const std::uint16_t* src, std::size_t n_u16, flo
         __m256  fscaled = _mm256_mul_ps(f32, v_scale);
         __m128i ph      = _mm256_cvtps_ph(fscaled, _MM_FROUND_TO_NEAREST_INT);
         _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i), ph);
+    }
+    for (; i < n_u16; ++i) { /* tail; empty for 273 PRB */
+        dst[i] = bf16_to_fp16_scalar(src[i], scale);
+    }
+#elif defined(E3_CONVERT_NEON)
+    /* 8 bf16 -> 8 fp16 per iteration:
+     *   load 8 bf16 (16 B) -> widen each half to 4x u32 shifted left 16 (bf16
+     *   promoted to fp32) -> multiply by scale -> FCVTN/FCVTN2 to 8 fp16 (round
+     *   to nearest-even, as _MM_FROUND_TO_NEAREST_INT above) -> store 16 B. */
+    const float32x4_t v_scale = vdupq_n_f32(scale);
+    std::size_t       i       = 0;
+    for (; i + 8 <= n_u16; i += 8) {
+        const uint16x8_t  b16 = vld1q_u16(src + i);
+        const uint32x4_t  lo  = vshll_n_u16(vget_low_u16(b16), 16);
+        const uint32x4_t  hi  = vshll_high_n_u16(b16, 16);
+        const float32x4_t flo = vmulq_f32(vreinterpretq_f32_u32(lo), v_scale);
+        const float32x4_t fhi = vmulq_f32(vreinterpretq_f32_u32(hi), v_scale);
+        const float16x8_t ph  = vcvt_high_f16_f32(vcvt_f16_f32(flo), fhi);
+        vst1q_u16(dst + i, vreinterpretq_u16_f16(ph));
     }
     for (; i < n_u16; ++i) { /* tail; empty for 273 PRB */
         dst[i] = bf16_to_fp16_scalar(src[i], scale);
@@ -214,10 +252,23 @@ convert_slot(std::uint16_t* dst, const std::uint16_t* src, const RowGeometry& ge
 inline constexpr bool
 has_vector_path()
 {
-#if defined(__AVX2__) && defined(__F16C__)
+#if defined(E3_CONVERT_AVX2) || defined(E3_CONVERT_NEON)
     return true;
 #else
     return false;
+#endif
+}
+
+/* The same, as the name to put in that log line. */
+inline constexpr const char*
+vector_path_name()
+{
+#if defined(E3_CONVERT_AVX2)
+    return "AVX2+F16C";
+#elif defined(E3_CONVERT_NEON)
+    return "NEON";
+#else
+    return "SCALAR(!!)";
 #endif
 }
 
