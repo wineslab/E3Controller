@@ -76,12 +76,18 @@ ifeq ($(origin CC),default)
 CC := clang
 endif
 
+# `-target bpf` does not search the multiarch include directory, where glibc
+# keeps bits/*.h on Debian/Ubuntu (/usr/include/aarch64-linux-gnu on arm64), so
+# <stdint.h> fails there. Add it explicitly, as jbpf's own test codelets do.
+SYS_INC := $(addprefix -I,$(wildcard /usr/include/$(shell uname -m)-linux-gnu))
+
 INC := -I$(JBPF_OUT_DIR)/inc \
        -I$(JBPF_DIR)/src/core \
        -I$(JBPF_DIR)/src/common \
        -I$(OCUDU_JANUS_INC) \
        -I$(OCUDU_SPECS_INC) \
-       -I$(CONTRACT_INC)
+       -I$(CONTRACT_INC) \
+       $(SYS_INC)
 
 # -target bpf: codelets are eBPF objects, loaded by ubpf in the gNB.
 #
