@@ -1,0 +1,20 @@
+codeletset_id: dapp_report_relay
+
+codelet_descriptor:
+
+  - codelet_name: relay
+    codelet_path: ${JBPF_CODELETS}/dapp_report_relay/dapp_report_relay.o
+    hook_name: e3_dapp_report_poll
+    priority: 1
+    # In: the dApp reports, as struct e3_dapp_report_msg. Out: how many xApps
+    # are subscribed, as struct e3_dapp_presence_msg (both in
+    # codelets/include/jbpf_e3_dapp_api.h). The E3Controller builds the load
+    # request programmatically (src/e3sm/dapp_report_relay.cpp), so this file is
+    # here for reference and for jbpf_lcm_cli users -- keep the names and the
+    # stream ids in sync with both.
+    in_io_channel:
+      - name: report_in
+        stream_id: "7531abcd1234567890fedcba0987656a"
+    out_io_channel:
+      - name: presence_out
+        stream_id: "7531abcd1234567890fedcba0987656b"
