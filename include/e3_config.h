@@ -159,13 +159,24 @@ struct LoggingConfig {
     std::string latrec_dir;
 };
 
+/* dApp reports, passed on to the gNB's E2SM-DAPP bridge and from there to an
+ * xApp (src/e3sm/dapp_report_relay.h). */
+struct DAppReportConfig {
+    bool enabled = true;
+
+    /* Reports waiting for the main loop to send them to the gNB. A report that
+     * finds the queue full is dropped and counted. */
+    std::size_t queue_depth = 256;
+};
+
 struct ControllerConfig {
-    RadioGeometry radio;
-    ShmConfig     shm;
-    JbpfConfig    jbpf;
-    E3Config      e3;
-    ThreadConfig  threads;
-    LoggingConfig logging;
+    RadioGeometry    radio;
+    ShmConfig        shm;
+    JbpfConfig       jbpf;
+    E3Config         e3;
+    ThreadConfig     threads;
+    LoggingConfig    logging;
+    DAppReportConfig dapp_reports;
 
     /*
      * Legacy single-slot filter, kept for compatibility.

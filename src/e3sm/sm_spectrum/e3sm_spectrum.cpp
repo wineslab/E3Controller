@@ -58,10 +58,19 @@ void E3SMSpectrum::stop() {
 }
 
 std::vector<uint8_t> E3SMSpectrum::ran_function_data() const {
-    // RF=1 Spectrum is ASN.1/APER-only (Spectrum-RanFunctionData). The dApp
-    // that consumes RF=1 (the public Spectrum Sharing dApp) speaks asn1.
+    // In the agent's encoding: APER Spectrum-RanFunctionData, or its JSON twin
+    // (the same fields as a JSON object), as OAI's Spectrum SM sends it.
+    const libe3::EncodingFormat enc =
+        agent_ ? agent_->config().encoding : libe3::EncodingFormat::ASN1;
+
     std::vector<uint8_t> encoded;
-    if (!e3sm_spectrum::encode_spectrum_ran_function_data(encoded)) {
+    bool ok = false;
+    if (enc == libe3::EncodingFormat::JSON) {
+        ok = e3sm_spectrum::encode_spectrum_ran_function_data_json(encoded);
+    } else {
+        ok = e3sm_spectrum::encode_spectrum_ran_function_data(encoded);
+    }
+    if (!ok) {
         std::fprintf(stderr, "[E3SMSpectrum] Failed to encode RAN function data\n");
         return {};
     }
@@ -203,15 +212,43 @@ libe3::ErrorCode E3SMSpectrum::handle_control_action(
     uint32_t request_message_id,
     const libe3::DAppControlAction& action)
 {
-    e3sm_spectrum::SpectrumPRBBlacklistControl ctrl;
-    if (!e3sm_spectrum::decode_spectrum_prb_blacklist_control(
-            action.action_data, ctrl)) {
+    // Only the PRB blacklist control (id 1) is handled. OAI's Spectrum SM also
+    // has 2 (sensing policy), 3 (sensing reservation) and 4 (PUSCH slots).
+    if (action.control_identifier != CONTROL_ID_PRB_BLACKLIST) {
         std::fprintf(stderr,
-            "[E3SMSpectrum] Failed to APER-decode PRBBlacklistControl from dApp %u\n",
-            action.dapp_identifier);
+            "[E3SMSpectrum] Rejected control id %u from dApp %u: only %u (PRB blacklist) is handled\n",
+            action.control_identifier, action.dapp_identifier, CONTROL_ID_PRB_BLACKLIST);
         auto nack = make_message_ack_pdu(request_message_id,
                                          libe3::ResponseCode::NEGATIVE);
         emit_outbound(std::move(nack));
+        return libe3::ErrorCode::SM_ERROR_INVALID_PARAM;
+    }
+
+    // The control comes in the agent's encoding, as on OAI's gNB: a JSON run
+    // takes the JSON envelope, an ASN.1 run the APER one.
+    const libe3::EncodingFormat enc =
+        agent_ ? agent_->config().encoding : libe3::EncodingFormat::ASN1;
+    const bool json = (enc == libe3::EncodingFormat::JSON);
+
+    e3sm_spectrum::SpectrumPRBBlacklistControl ctrl;
+    std::string why;
+    e3sm_spectrum::DecodeResult result;
+    if (json) {
+        result = e3sm_spectrum::decode_spectrum_dapp_control_json(action.action_data, ctrl, why);
+    } else {
+        result = e3sm_spectrum::decode_spectrum_dapp_control_aper(action.action_data, ctrl, why);
+    }
+
+    if (result != e3sm_spectrum::DecodeResult::ok) {
+        std::fprintf(stderr,
+            "[E3SMSpectrum] Rejected %s control from dApp %u: %s\n",
+            json ? "JSON" : "APER", action.dapp_identifier, why.c_str());
+        auto nack = make_message_ack_pdu(request_message_id,
+                                         libe3::ResponseCode::NEGATIVE);
+        emit_outbound(std::move(nack));
+        if (result == e3sm_spectrum::DecodeResult::unsupported) {
+            return libe3::ErrorCode::SM_ERROR_INVALID_PARAM;
+        }
         return libe3::ErrorCode::DECODE_FAILED;
     }
 
@@ -220,8 +257,14 @@ libe3::ErrorCode E3SMSpectrum::handle_control_action(
     for (std::size_t i = 0; i < ctrl.blacklisted_prbs.size(); ++i) {
         std::printf("%s%d", i > 0 ? ", " : "", ctrl.blacklisted_prbs[i]);
     }
-    std::printf("] samplingThreshold=%d validityPeriod=%d\n",
-                ctrl.sampling_threshold, ctrl.validity_period);
+    std::printf("]");
+    if (ctrl.sampling_threshold.has_value()) {
+        std::printf(" samplingThreshold=%d", ctrl.sampling_threshold.value());
+    }
+    if (ctrl.validity_period.has_value()) {
+        std::printf(" validityPeriod=%d", ctrl.validity_period.value());
+    }
+    std::printf("\n");
 
     // TODO: Apply the PRB blacklist to the RAN. Currently an ACK-and-log
     // stub; flagged in docs/known-limitations.md.

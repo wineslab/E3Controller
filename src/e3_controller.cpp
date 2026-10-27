@@ -47,6 +47,7 @@ extern "C" {
 #include "e3sm/l1_kpm/e3sm_layer_1.h"
 #include "e3sm/iq_pipeline.h"
 #include "e3sm/slot_iq_pipeline.h"
+#include "e3sm/dapp_report_relay.h"
 
 // ---- Global state ----
 
@@ -358,6 +359,21 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // dApp reports, passed on to the gNB's E2SM-DAPP bridge for an xApp (see
+    // src/e3sm/dapp_report_relay.h). libe3 has one report handler for the whole
+    // agent, which has to be set before agent.start().
+    std::unique_ptr<e3sm_pipeline::DAppReportRelay> report_relay;
+    if (config.dapp_reports.enabled) {
+        e3sm_pipeline::DAppReportRelay::Config relay_cfg;
+        relay_cfg.lcm_socket_path   = config.jbpf.lcm_socket_path;
+        relay_cfg.codelet_base_path = config.jbpf.codelet_base_path;
+        relay_cfg.queue_depth       = config.dapp_reports.queue_depth;
+        report_relay = std::make_unique<e3sm_pipeline::DAppReportRelay>(io_ctx, dispatcher, std::move(relay_cfg));
+
+        e3sm_pipeline::DAppReportRelay* relay = report_relay.get();
+        agent.set_dapp_report_handler([relay](const libe3::DAppReport& report) { relay->on_report(report); });
+    }
+
     // Both pipelines are deferred until first subscription. Each SM's start()
     // boots its pipeline (codelet load via LCM IPC + worker thread) on the
     // first dApp subscribe: E3SMSpectrum -> iq_pipeline (RF=1),
@@ -411,6 +427,9 @@ int main(int argc, char** argv)
     // Main polling loop — the dispatcher routes buffers to registered SMs
     while (g_running) {
         dispatcher.poll();
+        if (report_relay) {
+            report_relay->poll();
+        }
 
         if (busy_poll) {
 #if defined(__x86_64__) || defined(__i386__)
@@ -432,6 +451,9 @@ int main(int argc, char** argv)
     slot_iq_pipeline.stop();
     std::printf("[E3Controller] Stopping legacy IQ pipeline...\n");
     iq_pipeline.stop();
+    if (report_relay) {
+        report_relay->stop();
+    }
     std::printf("[E3Controller] Shutting down jbpf IO...\n");
     jbpf_io_stop();
 
@@ -453,6 +475,9 @@ int main(int argc, char** argv)
     std::printf("[SlotIqPipeline] slots dropped on a full SPSC queue: %lu\n",
                 static_cast<unsigned long>(queue_drops));
     std::printf("%s\n", layer1_ptr->drops_summary().c_str());
+    if (report_relay) {
+        std::printf("%s\n", report_relay->summary().c_str());
+    }
 
     std::printf("[E3Controller] Stopped.\n");
 

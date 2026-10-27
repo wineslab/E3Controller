@@ -1,13 +1,17 @@
 /*
  * E3SMSpectrum — Spectrum Service Model (RAN function ID 1).
  *
+ * The grammar is OAI's Spectrum SM (src/e3sm/asn/e3sm_spectrum.asn).
+ *
  * Telemetry + control:
- *   - IQ telemetry (telemetry id 1): consumes the ecpri_iq_samples codelet via
- *     IqPipeline and emits Spectrum-IQDataIndication (APER) to subscribed dApps
- *     — this is what the public Spectrum Sharing dApp subscribes to.
- *   - PRB blacklist control (control id 1): decodes Spectrum-PRBBlacklistControl
- *     and ACKs (application to the RAN is still a stub — see docs/known-limitations.md).
- *   - SetupResponse RAN function descriptor (Spectrum-RanFunctionData).
+ *   - IQ telemetry (telemetry id 1), LEGACY: consumes the ecpri_iq_samples
+ *     codelet via IqPipeline and emits Spectrum-IQDataIndication (APER) to
+ *     subscribed dApps. Obsolete; kept until that codelet is removed.
+ *   - PRB blacklist control (control id 1): decodes Spectrum-DAppControlData in
+ *     the agent's encoding (APER, or OAI's JSON envelope) and ACKs. Application
+ *     to the RAN is still a stub — see docs/known-limitations.md.
+ *   - SetupResponse RAN function descriptor (Spectrum-RanFunctionData), in the
+ *     agent's encoding.
  *
  * IQ-consuming SM pattern (mirrors E3SMLayer1): register a pipeline consumer at
  * init(), then start/stop the pipeline lazily on first/last dApp subscription.
@@ -34,6 +38,8 @@
 class E3SMSpectrum : public libe3::ServiceModel {
 public:
     static constexpr uint32_t RAN_FUNCTION_ID = 1;
+    // Control ids, as in OAI's Spectrum SM (spectrum_sm.c). Only the first is handled.
+    static constexpr uint32_t CONTROL_ID_PRB_BLACKLIST = 1;
 
     E3SMSpectrum(e3sm_pipeline::IqPipeline& pipeline,
                  libe3::E3Agent& agent,
@@ -46,7 +52,7 @@ public:
     uint32_t    version() const override { return 1; }
     uint32_t    ran_function_id() const override { return RAN_FUNCTION_ID; }
     std::vector<uint32_t> telemetry_ids() const override { return {1}; }
-    std::vector<uint32_t> control_ids()   const override { return {1}; }
+    std::vector<uint32_t> control_ids()   const override { return {CONTROL_ID_PRB_BLACKLIST}; }
 
     libe3::ErrorCode init() override;
     void             destroy() override;
@@ -54,7 +60,7 @@ public:
     void             stop() override;
     bool             is_running() const override { return running_.load(std::memory_order_acquire); }
 
-    // Descriptive RAN function data (Spectrum-RanFunctionData, APER).
+    // Descriptive RAN function data (Spectrum-RanFunctionData), APER or JSON.
     std::vector<uint8_t> ran_function_data() const override;
 
     libe3::ErrorCode handle_control_action(
