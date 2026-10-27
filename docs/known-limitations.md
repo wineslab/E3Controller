@@ -16,12 +16,12 @@ in-band IQ indication, so it is only useful under `e3.encoding: asn1` (under
 `json` the SM warns once and drops indications). **RF=2 L1-KPM**
 supports both encodings.
 
-## Missing PRB blacklist control 
+## Missing PRB blacklist control
 
-`E3SMSpectrum::handle_control_action()` (RF=1) decodes the
-`Spectrum-PRBBlacklistControl` payload, logs the requested PRB list, and
-sends a POSITIVE ACK back to the dApp — but the actual application of
-the blacklist to the RAN scheduler is not implemented. The
+`E3SMSpectrum::handle_control_action()` (RF=1) decodes the dApp's
+`Spectrum-DAppControlData`, in the agent's encoding, logs the requested PRB list,
+and sends a POSITIVE ACK back to the dApp. The actual application of the
+blacklist to the RAN scheduler is not implemented: the
 `// TODO: Apply the PRB blacklist to the RAN` line in
 [`src/e3sm/sm_spectrum/e3sm_spectrum.cpp`](../src/e3sm/sm_spectrum/e3sm_spectrum.cpp)
 marks the spot. dApps that rely on the control side-effect (rather than just the

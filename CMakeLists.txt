@@ -331,3 +331,25 @@ if(E3C_BUILD_BENCH)
     RUNTIME_OUTPUT_DIRECTORY "${OUTPUT_DIR}/bin"
   )
 endif()
+
+# ---- Unit tests ----
+# Service Model codecs, no RAN needed. Run with ctest from the build directory,
+# or out/bin/test_spectrum_sm directly.
+option(E3C_BUILD_TESTS "Build the unit tests" OFF)
+
+if(E3C_BUILD_TESTS)
+  enable_testing()
+  add_executable(test_spectrum_sm
+    tests/test_spectrum_sm.cpp
+    src/e3sm/sm_spectrum/e3sm_spect_wrapper.cpp
+  )
+  target_include_directories(test_spectrum_sm PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(test_spectrum_sm PRIVATE e3sm_asn libe3::libe3)
+  set_target_properties(test_spectrum_sm PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${OUTPUT_DIR}/bin"
+  )
+  # add_test is still the no-op macro defined above to keep jbpf's tests out
+  # (unset() does not remove a macro). CMake keeps the original command as
+  # _add_test.
+  _add_test(NAME spectrum_sm COMMAND test_spectrum_sm)
+endif()
