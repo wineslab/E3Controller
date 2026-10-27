@@ -7,9 +7,16 @@
 # Spectrum-ConfigControl, is generated but no longer compiled (see
 # CMakeLists.txt), and libe3 >= 0.0.7 does not ship a BOOLEAN runtime either.
 
-set(ASN1C_DIR "${CMAKE_BINARY_DIR}/asn1c_generated")
+# Pass -DASN1C_DIR=<dir>. In -P script mode CMAKE_BINARY_DIR is the working
+# directory, not the build root: a custom command runs in
+# <build>/src/e3sm/asn, so the default below would name a directory that does
+# not exist, and the cleanup would silently keep the whole asn1c runtime --
+# whose headers (asn_config.h among them) would then shadow libe3's.
+if(NOT ASN1C_DIR)
+    set(ASN1C_DIR "${CMAKE_BINARY_DIR}/asn1c_generated")
+endif()
 if(NOT EXISTS "${ASN1C_DIR}")
-    return()
+    message(FATAL_ERROR "cleanup_asn1c.cmake: ${ASN1C_DIR} does not exist")
 endif()
 
 file(GLOB _all_files "${ASN1C_DIR}/*")

@@ -28,6 +28,14 @@ set(ASN1_SOURCES
 )
 set(ASN1C_STAMP "${ASN1C_OUTPUT_DIR}/.asn1c_stamp")
 
+# The codecs asn1c generates code for. They must be libe3's (libe3
+# messages/CMakeLists.txt): asn1c writes them into asn_config.h as
+# ASN_DISABLE_*_SUPPORT, and that header sets the layout of every
+# asn_TYPE_operation_t. Only libe3's asn_config.h is on the include path (the
+# cleanup below deletes ours), so a type generated with other codecs would be
+# compiled against a runtime that has a different idea of its tables.
+set(ASN1C_CODEC_FLAGS -no-gen-OER -no-gen-BER -no-gen-JER)
+
 # Only our SM type-specific generated files. asn1c emits one .c per top-level
 # type definition; both modules share the same constraint-table / per-codec
 # routines via the libe3 runtime.
@@ -52,7 +60,7 @@ if(NOT EXISTS "${ASN1C_STAMP}")
             -fincludes-quoted
             -fno-include-deps
             -no-gen-example
-            -no-gen-OER
+            ${ASN1C_CODEC_FLAGS}
             ${ASN1_SOURCES}
         RESULT_VARIABLE ASN1C_RESULT
     )
@@ -83,10 +91,11 @@ add_custom_command(
         -fincludes-quoted
         -fno-include-deps
         -no-gen-example
-        -no-gen-OER
+        ${ASN1C_CODEC_FLAGS}
         ${ASN1_SOURCES}
     # Remove runtime files, keep only Spectrum-* and L1KPM-* types
-    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/cleanup_asn1c.cmake
+    COMMAND ${CMAKE_COMMAND} -DASN1C_DIR=${ASN1C_OUTPUT_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cleanup_asn1c.cmake
     COMMAND ${CMAKE_COMMAND} -E touch ${ASN1C_STAMP}
     # Declared so CMake knows they come from here: a type added to an .asn
     # (a new .c in the list) then regenerates in an existing build dir
