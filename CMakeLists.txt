@@ -271,6 +271,8 @@ add_executable(e3_controller
   # shared data plane
   src/e3sm/iq_pipeline.cpp
   src/e3sm/slot_iq_pipeline.cpp
+  # dApp reports to the gNB's E2SM-DAPP bridge
+  src/e3sm/dapp_report_relay.cpp
   # configuration (YAML)
   src/e3_config.cpp
   # writers + decompression
@@ -352,4 +354,12 @@ if(E3C_BUILD_TESTS)
   # (unset() does not remove a macro). CMake keeps the original command as
   # _add_test.
   _add_test(NAME spectrum_sm COMMAND test_spectrum_sm)
+
+  # Header only: no jbpf or libe3 needed.
+  add_executable(test_xapp_presence tests/test_xapp_presence.cpp)
+  target_include_directories(test_xapp_presence PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  set_target_properties(test_xapp_presence PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${OUTPUT_DIR}/bin"
+  )
+  _add_test(NAME xapp_presence COMMAND test_xapp_presence)
 endif()

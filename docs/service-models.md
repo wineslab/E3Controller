@@ -74,6 +74,28 @@ It generates the types with libe3's codec set (`-no-gen-BER -no-gen-JER
 -no-gen-OER`), because libe3's `asn_config.h` decides the layout of every type
 table.
 
+## dApp reports to an xApp (E2SM-DAPP)
+
+A dApp's `E3-DAppReport`, for example the PRBs where it detected an incumbent, is
+passed on to the gNB, whose E2SM-DAPP service model (RAN function 255) sends it to
+the subscribed xApps. On OAI the gNB's own E3 agent does this. Here the E3 agent
+is a separate process, so the report goes through a codelet: `DAppReportRelay`
+(`src/e3sm/dapp_report_relay.*`) loads `dapp_report_relay` into the gNB with the
+first report and sends it the reports as control input, and ocudu's bridge
+(`ocudu_janus/e3_dapp/`) takes them from there.
+
+Nobody decodes the report on the way. The xApp decodes it with the service model
+of the report's RAN function, so a Spectrum report has to be APER
+`Spectrum-DAppReportData`, also on a JSON E3 link (libe3 carries `reportData` as
+hex in JSON and gives back the raw bytes).
+
+The controller forwards reports only while an xApp is subscribed, which the
+codelet tells it, and drops them otherwise (`no_xapp`). The dApp is not told and
+keeps reporting, as with OAI. `dapp_reports.enabled: false` turns the relay off.
+
+The codelet's [README](../codelets/dapp_report_relay/README.md) has the whole
+path, the contract with ocudu, the configuration and the counters on both sides.
+
 ## Adding a New Service Model
 
 There are two flavours of SM, depending on what data it needs:
