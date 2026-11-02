@@ -192,7 +192,8 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
         return false;
     }
 
-    if (!check_keys(root, "<root>", {"radio", "shm", "jbpf", "e3", "threads", "logging", "target_slot"}, err)) {
+    if (!check_keys(root, "<root>",
+                    {"radio", "shm", "jbpf", "e3", "threads", "logging", "dapp_reports", "target_slot"}, err)) {
         return false;
     }
 
@@ -290,6 +291,15 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
             get(n, "latrec_dir", out.logging.latrec_dir);
         }
 
+        /* ---- dapp_reports ---- */
+        if (const auto n = root["dapp_reports"]) {
+            if (!check_keys(n, "dapp_reports", {"enabled", "queue_depth"}, err)) {
+                return false;
+            }
+            get(n, "enabled", out.dapp_reports.enabled);
+            get(n, "queue_depth", out.dapp_reports.queue_depth);
+        }
+
         get(root, "target_slot", out.target_slot);
     } catch (const std::exception& e) {
         err = std::string("error parsing '") + path + "': " + e.what();
@@ -319,6 +329,11 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
     if (!(out.shm.cbf16_scale > 0.0f)) {
         err = "shm.cbf16_scale must be > 0 (a zero or negative scale zeroes the row and "
               "silently breaks the dApp)";
+        return false;
+    }
+
+    if (out.dapp_reports.queue_depth < 1 || out.dapp_reports.queue_depth > 65536) {
+        err = "dapp_reports.queue_depth must be 1..65536";
         return false;
     }
 
@@ -360,6 +375,12 @@ print_config(const ControllerConfig& cfg)
     }
     if (!cfg.logging.drops_log_path.empty()) {
         std::printf("  drop log:   %s\n", cfg.logging.drops_log_path.c_str());
+    }
+    if (cfg.dapp_reports.enabled) {
+        std::printf("  dApp reports: relayed to the gNB's E2SM-DAPP bridge (queue %zu)\n",
+                    cfg.dapp_reports.queue_depth);
+    } else {
+        std::printf("  dApp reports: not relayed (dapp_reports.enabled: false)\n");
     }
     /* Three distinguishable states, worth telling apart on startup: not
      * compiled in, compiled in and writing where libe3 was built to write, or

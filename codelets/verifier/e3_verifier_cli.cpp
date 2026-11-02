@@ -15,7 +15,9 @@
  * Registers, on top of jbpf's built-in program/helper/map tables:
  *   - program type jbpf_ran_ofh  (ecpri_iq_samples)
  *   - program type jbpf_ran_slot (uplink_slot_samples)
- *   - helper prototypes for the two E3 helpers in jbpf_e3_ids.h
+ *   - program type jbpf_e2_dapp  (dapp_report_relay)
+ *   - helper prototypes for the two E3 helpers in jbpf_e3_ids.h and the one
+ *     in jbpf_e3_dapp_api.h
  *
  * Usage: e3_verifier_cli <codelet.o> [section] [--asm <out.asm>]
  * Exit:  0 = verified, 1 = failed (matching jbpf_verifier_cli's `return !res`).
@@ -39,6 +41,7 @@ extern "C" {
 }
 
 #include "jbpf_e3_ids.h"
+#include "jbpf_e3_dapp_api.h"
 
 /* ------------------------------------------------------------------ *
  *  Context descriptors, derived from the ocudu contract header
@@ -107,6 +110,15 @@ static constexpr ebpf_context_descriptor_t g_ran_slot_descr = {
     kNoMetaRegion,
 };
 
+/* The E2SM-DAPP bridge hook (jbpf_e3_dapp_api.h). Its data/data_end are always
+ * 0: the codelet only drains control input. */
+static constexpr ebpf_context_descriptor_t g_e2_dapp_descr = {
+    CTX_EXTENT(struct jbpf_e2_dapp_ctx, nof_subscriptions),
+    static_cast<int>(offsetof(struct jbpf_e2_dapp_ctx, data)),
+    static_cast<int>(offsetof(struct jbpf_e2_dapp_ctx, data_end)),
+    kNoMetaRegion,
+};
+
 /* Tripwires: if either fires, the RAN-side ctx layout changed. Re-derive the
  * expectation deliberately rather than just bumping the number — a moved
  * data/data_end/meta_data offset also invalidates every compiled codelet. */
@@ -114,6 +126,8 @@ static_assert(g_ran_ofh_descr.size == 27, "jbpf_ran_ofh_ctx layout changed (expe
 static_assert(g_ran_slot_descr.size == 47, "jbpf_ran_slot_ctx layout changed (expected 47 B extent)");
 static_assert(g_ran_slot_descr.data == 0 && g_ran_slot_descr.end == 8, "jbpf_ran_slot_ctx data/data_end moved");
 static_assert(g_ran_ofh_descr.data == 0 && g_ran_ofh_descr.end == 8, "jbpf_ran_ofh_ctx data/data_end moved");
+static_assert(g_e2_dapp_descr.size == 28, "jbpf_e2_dapp_ctx layout changed (expected 28 B extent)");
+static_assert(g_e2_dapp_descr.data == 0 && g_e2_dapp_descr.end == 8, "jbpf_e2_dapp_ctx data/data_end moved");
 
 /* ------------------------------------------------------------------ *
  *  Helper prototypes
@@ -166,6 +180,21 @@ static const EbpfHelperPrototype g_e3_publish_slot_proto = {
         EBPF_ARGUMENT_TYPE_CONST_SIZE_OR_ZERO,
         EBPF_ARGUMENT_TYPE_PTR_TO_READABLE_MEM,
         EBPF_ARGUMENT_TYPE_CONST_SIZE_OR_ZERO,
+        EBPF_ARGUMENT_TYPE_DONTCARE,
+    },
+    false,
+    nullptr,
+};
+
+/* jbpf_e3_dapp_report_push(msg, msg_len): one (ptr, size) pair, like e3_attach. */
+static const EbpfHelperPrototype g_e3_dapp_report_push_proto = {
+    "e3_dapp_report_push",
+    EBPF_RETURN_TYPE_INTEGER,
+    {
+        EBPF_ARGUMENT_TYPE_PTR_TO_READABLE_MEM,
+        EBPF_ARGUMENT_TYPE_CONST_SIZE_OR_ZERO,
+        EBPF_ARGUMENT_TYPE_DONTCARE,
+        EBPF_ARGUMENT_TYPE_DONTCARE,
         EBPF_ARGUMENT_TYPE_DONTCARE,
     },
     false,
@@ -245,6 +274,14 @@ register_e3_extensions()
     ran_slot.is_privileged          = false;
     jbpf_verifier_register_program_type(JBPF_E3_PROG_TYPE_RAN_SLOT, ran_slot);
 
+    EbpfProgramType e2_dapp;
+    e2_dapp.name                   = "jbpf_e2_dapp";
+    e2_dapp.context_descriptor     = &g_e2_dapp_descr;
+    e2_dapp.platform_specific_data = JBPF_E3_PROG_TYPE_E2_DAPP;
+    e2_dapp.section_prefixes       = {JBPF_E3_SEC_E2_DAPP};
+    e2_dapp.is_privileged          = false;
+    jbpf_verifier_register_program_type(JBPF_E3_PROG_TYPE_E2_DAPP, e2_dapp);
+
     /* Close the gap between jbpf's built-ins and our custom range BEFORE
      * registering ours, so no zeroed entry is ever reachable. See the comment
      * on g_unregistered_proto. JBPF_NUM_HELPERS_MAX is one past the last
@@ -259,6 +296,7 @@ register_e3_extensions()
     /* Helpers. */
     jbpf_verifier_register_helper(JBPF_E3_ATTACH_ID, g_e3_attach_proto);
     jbpf_verifier_register_helper(JBPF_E3_PUBLISH_SLOT_ID, g_e3_publish_slot_proto);
+    jbpf_verifier_register_helper(JBPF_E3_DAPP_REPORT_PUSH_ID, g_e3_dapp_report_push_proto);
 }
 
 /* ------------------------------------------------------------------ */

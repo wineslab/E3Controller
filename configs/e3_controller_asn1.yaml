@@ -218,4 +218,18 @@ logging:
   # wraps -- and a wrapped capture is not a valid measurement. Raise it with
   # LATREC_ENTRIES_LOG2_E3CONTROLLER_L1_KPM=24 (512 MiB, ~28 min); ceiling 2^28.
   latrec_dir: ""
+
+# ---- dApp reports to an xApp -------------------------------------------------
+# A dApp's E3 DAppReport (for example the PRBs where it detected an incumbent)
+# is passed on to the gNB, whose E2SM-DAPP service model sends it to an xApp
+# over E2. The controller loads the codelet dapp_report_relay into the gNB on the
+# first report. Needs a gNB built with the E2SM-DAPP bridge and e2sm_dapp_enabled
+# in its e2 section; without one the reports are counted as no_codelet and
+# dropped. See src/e3sm/dapp_report_relay.h.
+dapp_reports:
+  enabled: true
+  # Reports waiting for the main loop to send them on. More are dropped and
+  # counted as queue_full.
+  queue_depth: 256
+
 target_slot: -1

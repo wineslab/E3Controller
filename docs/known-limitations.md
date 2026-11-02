@@ -16,16 +16,38 @@ in-band IQ indication, so it is only useful under `e3.encoding: asn1` (under
 `json` the SM warns once and drops indications). **RF=2 L1-KPM**
 supports both encodings.
 
-## Missing PRB blacklist control 
+## Missing PRB blacklist control
 
-`E3SMSpectrum::handle_control_action()` (RF=1) decodes the
-`Spectrum-PRBBlacklistControl` payload, logs the requested PRB list, and
-sends a POSITIVE ACK back to the dApp — but the actual application of
-the blacklist to the RAN scheduler is not implemented. The
+`E3SMSpectrum::handle_control_action()` (RF=1) decodes the dApp's
+`Spectrum-DAppControlData`, in the agent's encoding, logs the requested PRB list,
+and sends a POSITIVE ACK back to the dApp. The actual application of the
+blacklist to the RAN scheduler is not implemented: the
 `// TODO: Apply the PRB blacklist to the RAN` line in
 [`src/e3sm/sm_spectrum/e3sm_spectrum.cpp`](../src/e3sm/sm_spectrum/e3sm_spectrum.cpp)
 marks the spot. dApps that rely on the control side-effect (rather than just the
 ACK) will not see scheduler behaviour change.
+
+## dApp reports reach the xApp, nothing comes back
+
+dApp reports go to an xApp through the gNB's E2SM-DAPP bridge
+([Service models](service-models.md#dapp-reports-to-an-xapp-e2sm-dapp)), but:
+
+- xApp controls are not relayed to the dApp yet: the gNB answers them with a
+  failure ("no E3 link").
+- E2SM-DAPP report style 2 (the map of dApps and their E3 RAN functions) never
+  sends an indication.
+- A report larger than 2048 bytes is dropped (`too_big`). A full 273-PRB report is
+  about 310 bytes.
+- While no xApp has a data subscription, the controller drops the dApp's
+  reports (`no_xapp`); the dApp keeps sending them. When an xApp subscribes,
+  forwarding starts with the codelet's first presence message (within 0.5 ms);
+  the reports dropped before are not sent later.
+- After a gNB restart the relay codelet is gone and the controller does not load
+  it again: the presence messages stop, so reports are dropped (`no_xapp`) until
+  the controller is restarted too.
+- The bridge keeps the last 64 reports for each subscription. A subscription whose
+  indications cannot be sent fast enough loses the oldest ones, counted as
+  `overrun` in the gNB's `[e3_dapp]` line.
 
 ## Slot buffer size is compile-time in the codelet
 

@@ -8,6 +8,7 @@ dependency on `jrtc-apps`.
 |---|---|---|---|
 | `ecpri_iq_samples/` | `capture_xran_packet` | `jbpf_ran_ofh` | Spectrum (RAN function 1) |
 | `uplink_slot_samples/` | `capture_uplink_slot` | `jbpf_ran_slot` | L1 (RAN function 2) |
+| `dapp_report_relay/` | `e3_dapp_report_poll` | `jbpf_e2_dapp` | dApp reports to the gNB's E2SM-DAPP, and back the number of subscribed xApps ([README](dapp_report_relay/README.md)) |
 
 ## Build
 
@@ -82,7 +83,8 @@ export JBPF_CODELETS=/path/to/E3Controller/codelets
 
 ## Extension IDs
 
-Helper and program-type IDs live in `include/jbpf_e3_ids.h`, allocated from
+Helper and program-type IDs live in `include/jbpf_e3_ids.h` (and, for the dApp
+report relay, `include/jbpf_e3_dapp_api.h`), allocated from
 jbpf's documented extension ranges (`CUSTOM_HELPER_START_ID`,
 `CUSTOM_PROGRAM_START_ID`). That header is shared by the codelets, the
 verifier, and the gNB-side helper registration in ocudu — if those three ever
