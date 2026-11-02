@@ -219,6 +219,7 @@ jbpf_main(void* state)
     out->nof_ports       = ctx->nof_ports;
     out->nof_symbols     = ctx->nof_symbols;
     out->nof_subcarriers = ctx->nof_subcarriers;
+    out->valid_symbol_mask = ctx->valid_symbol_mask;   /* uplink symbols per the gNB's TDD pattern */
 
     /* Stamped last so the controller's codelet_to_dispatch measurement reflects
      * only the dispatcher's pickup latency. */

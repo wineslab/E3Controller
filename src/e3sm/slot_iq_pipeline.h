@@ -68,6 +68,11 @@ struct SlotSample {
     uint16_t nof_symbols{0};
     uint16_t nof_subcarriers{0};
 
+    /* Bit s set = symbol s is uplink per the gNB's TDD pattern; DL and guard
+     * symbols of a mixed slot are 0, FDD has all nof_symbols bits set. Sent to
+     * the dApp as validSymbolMask so it can skip the non-uplink symbols. */
+    uint16_t valid_symbol_mask{0};
+
     /* Pointer into the worker's backing buffer. Valid for the callback
      * duration only. cbf16_t = 4 bytes per complex sample.
      *

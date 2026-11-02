@@ -19,6 +19,9 @@
  * /dev/shm/<shm_name>; the JSON payload carries only the SHM coordinates plus
  * 5G time-position metadata (sfn/slot) for TDD-aligned visualizer rendering.
  *
+ * n_rx_ant (antennas in the row) and valid_symbol_mask (bit s set = symbol s is uplink per the gNB's TDD
+ * pattern; a mixed slot's DL and guard symbols are 0).
+ *
  * We emit a UTF-8 JSON object so libe3's outer JsonE3Encoder embeds it inline
  * via bytes_to_json_payload (libe3/src/encoder/json_encoder.cpp). It is the
  * JSON twin of e3sm_layer1::encode_iq_indication_aper() (e3sm_layer1_wrapper.h).
@@ -39,6 +42,8 @@ namespace e3sm_layer1 {
 //                  back so the dApp can sanity-check against its own mmap.
 // fh_buffer_*    = ring-buffer coordinates the dApp uses to address the row.
 // nof_ports      = number of RX antennas in the shm row (emitted as n_rx_ant).
+// valid_symbol_mask = bit s set = symbol s is uplink per the gNB's TDD pattern
+//                  (emitted as valid_symbol_mask; DL/guard symbols are 0).
 bool encode_iq_indication_json(uint64_t timestamp_ns,
                                uint16_t sfn,
                                uint16_t slot,
@@ -46,6 +51,7 @@ bool encode_iq_indication_json(uint64_t timestamp_ns,
                                uint8_t fh_buffer_index,
                                uint32_t fh_write_index,
                                uint16_t nof_ports,
+                               uint16_t valid_symbol_mask,
                                std::vector<uint8_t>& out);
 
 }  // namespace e3sm_layer1
