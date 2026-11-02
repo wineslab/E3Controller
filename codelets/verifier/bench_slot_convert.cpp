@@ -17,6 +17,7 @@
  *
  * Build (must be explicit about the ISA — that is the point):
  *   g++ -O2 -std=c++17 -mavx2 -mf16c -I../include bench_slot_convert.cpp -o bench_slot_convert
+ *   g++ -O2 -std=c++17 -I../include bench_slot_convert.cpp -o bench_slot_convert   (aarch64: NEON)
  *   g++ -O2 -std=c++17 -DE3_ALLOW_SCALAR_CONVERT -DBENCH_FORCE_SCALAR \
  *       -I../include bench_slot_convert.cpp -o bench_slot_convert_scalar
  */
@@ -34,6 +35,7 @@
 /* Deliberately hide the vector path so we can price the fallback. */
 #undef __AVX2__
 #undef __F16C__
+#define E3_NO_NEON 1
 #define E3_ALLOW_SCALAR_CONVERT 1
 #endif
 
@@ -118,7 +120,7 @@ main(int argc, char** argv)
     int iters = (argc > 1) ? std::atoi(argv[1]) : 200;
 
     std::printf("bench_slot_convert — cbf16 -> fp16, 14 symbols x 3276 subcarriers\n");
-    std::printf("vector path compiled in: %s\n", e3_convert::has_vector_path() ? "YES (AVX2+F16C)" : "NO (SCALAR)");
+    std::printf("vector path compiled in: %s\n", e3_convert::vector_path_name());
     std::printf("iterations per config: %d   (median / p95 reported)\n", iters);
     std::printf("throughput counts bytes READ + WRITTEN\n\n");
 
