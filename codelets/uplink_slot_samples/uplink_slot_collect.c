@@ -145,6 +145,18 @@ jbpf_main(void* state)
         filtered = E3_SLOT_FLAG_FILTERED;
     }
 
+    /* ---- Who transmits, also BEFORE any data movement ----
+     *
+     * The PHY passes the receptions it expects in the slot. With ue_free_only,
+     * a slot with any of them is not published, and neither is one with unknown
+     * counts (0xFF). Unlike the temporal filter, it still sends a descriptor,
+     * flagged and with nothing written, so the controller can count busy slots
+     * against free ones. */
+    uint8_t ue_busy = 0;
+    if (sel->ue_free_only != 0 && (ctx->n_ue | ctx->n_pucch | ctx->n_srs_ue) != 0) {
+        ue_busy = 1;
+    }
+
     /* ---- Publish ----
      *
      * Ladder of per-config CONSTANT sizes, largest first. Two properties are
@@ -174,7 +186,11 @@ jbpf_main(void* state)
     uint32_t published = 0;
     uint8_t  flags = filtered;
 
-    if (src + E3_SLOT_BYTES_8P <= end) {
+    if (ue_busy) {
+        /* Nothing converted or written. rc 0 keeps the row indices at 0. */
+        flags |= E3_SLOT_FLAG_UE_BUSY;
+        rc = 0;
+    } else if (src + E3_SLOT_BYTES_8P <= end) {
         published = E3_SLOT_BYTES_8P;
         rc = jbpf_e3_publish_slot(src, E3_SLOT_BYTES_8P, sel, sizeof(*sel));
     } else if (src + E3_SLOT_BYTES_4P <= end) {
@@ -220,6 +236,9 @@ jbpf_main(void* state)
     out->nof_symbols     = ctx->nof_symbols;
     out->nof_subcarriers = ctx->nof_subcarriers;
     out->valid_symbol_mask = ctx->valid_symbol_mask;   /* uplink symbols per the gNB's TDD pattern */
+    out->n_ue            = ctx->n_ue;                  /* receptions the PHY expected in the slot */
+    out->n_pucch         = ctx->n_pucch;
+    out->n_srs_ue        = ctx->n_srs_ue;
 
     /* Stamped last so the controller's codelet_to_dispatch measurement reflects
      * only the dispatcher's pickup latency. */

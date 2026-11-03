@@ -51,7 +51,15 @@ FDD.
 **Breaking change from version 1.** Version 1 had a flat root (`iq_samples`,
 `n_rx_ant`, `valid_symbol_mask` next to `sfn`), and that layout is gone in both
 encodings. A dApp reads `cells[0].iq_samples` now, as NVIDIA's own dApps do since
-schema v1.2.0. An ASN.1 dApp needs the version 2 grammar.
+schema v1.2.0. An ASN.1 dApp needs the version 2 grammar. The slot hook context
+(`jbpf_ran_slot_ctx`) also changed, so build the gNB and the codelets from
+matching trees.
+
+**Indications for slots without PUSCH.** The specification's PUSCH path runs
+only for slots in which a cell receives PUSCH. This controller sends an
+indication for every slot the gNB publishes, including the slots no UE
+transmits in (`slot_filter.ue_free_only`, see [Usage](usage.md)). That case is
+an open item of the specification.
 
 ## RAN function data (RF=2)
 

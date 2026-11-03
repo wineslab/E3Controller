@@ -35,10 +35,11 @@
 
 /* ---- Selector: what to publish (control input, RAN function 2) ----
  *
- * TEMPORAL ONLY in this phase. Spatial selection (port/PRB/symbol subsets) is
- * deliberately deferred; `reserved` is where it lands, so adding it does not
- * break the ABI. See the plan's Out-of-scope section for why temporal is safe
- * for multiple dApps and spatial is not.
+ * TEMPORAL ONLY in this phase, plus a filter on whether any UE transmits in the
+ * slot. Spatial selection (port/PRB/symbol subsets) is deliberately deferred;
+ * `reserved` is where it lands, so adding it does not break the ABI. See the
+ * plan's Out-of-scope section for why temporal is safe for multiple dApps and
+ * spatial is not.
  *
  * Delivered by the E3Controller over a jbpf control-input channel. That is a
  * CHANNEL, not a one-shot: the codelet caches the latest value in an array map
@@ -75,8 +76,13 @@ struct e3_slot_sel {
     uint16_t sfn_mod;
     uint16_t sfn_offset;
 
+    /* 1 => publish only the slots no UE transmits in: the hook's n_ue, n_pucch
+     * and n_srs_ue are all 0.
+     * 0 => publish every slot */
+    uint8_t ue_free_only;
+
     /* Reserved for spatial selection (port_mask, symbol range, PRB range). */
-    uint8_t reserved[20];
+    uint8_t reserved[19];
 };
 
 #define E3_SLOT_SEL_VERSION 1u
@@ -183,7 +189,15 @@ struct e3_slot_desc {
      * mask only says which ones carry real uplink. */
     uint16_t valid_symbol_mask;
 
-    uint8_t  reserved[4];
+    /* Receptions the PHY expected in this slot, copied from jbpf_ran_slot_ctx:
+     * UEs with PUSCH (n_ue), PUCCH receptions and SRS receptions. All three 0
+     * = no UE transmitted in the slot. E3_SLOT_COUNT_UNKNOWN in all three when
+     * the PHY no longer knew them. */
+    uint8_t  n_ue;
+    uint8_t  n_pucch;
+    uint8_t  n_srs_ue;
+
+    uint8_t  reserved[1];
 };
 
 /* No ladder rung matched the observed grid, so nothing was published. Set
@@ -193,5 +207,13 @@ struct e3_slot_desc {
 
 /* The selector was active and this slot passed the filter (diagnostic). */
 #define E3_SLOT_FLAG_FILTERED 0x02u
+
+/* ue_free_only was set and a UE transmits in the slot, or the counts are
+ * unknown. Nothing was written: the descriptor only reports the skip. */
+#define E3_SLOT_FLAG_UE_BUSY 0x04u
+
+/* Value of n_ue, n_pucch and n_srs_ue when the PHY did not know them. Matches
+ * JBPF_SLOT_COUNT_UNKNOWN of the hook ctx, which the codelet copies as is. */
+#define E3_SLOT_COUNT_UNKNOWN 0xFFu
 
 #endif /* JBPF_E3_SLOT_API_H */

@@ -197,4 +197,13 @@ logging:
   # wraps -- and a wrapped capture is not a valid measurement. Raise it with
   # LATREC_ENTRIES_LOG2_E3CONTROLLER_L1_KPM=24 (512 MiB, ~28 min); ceiling 2^28.
   latrec_dir: ""
+# Which captured uplink slots the gNB publishes. The slot codelet decides in the
+# gNB, before any IQ is converted, so a slot left out costs the RAN nothing.
+slot_filter:
+  # true: only the slots no UE transmits in (the PHY expects no PUSCH, PUCCH or
+  # SRS there). The gNB captures empty slots only with
+  # expert_phy.allow_request_on_empty_uplink_slot: true.
+  ue_free_only: false
+  # Slot indices within the 10 ms frame (0..19 at 30 kHz). Empty = every slot.
+  slots: []
 target_slot: -1

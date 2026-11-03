@@ -89,6 +89,7 @@ public:
         NoSubscribers,       /* nobody subscribed to RF=2 yet                 */
         EncodeFailed,        /* APER/JSON encode error                        */
         EmitFailed,          /* libe3 rejected the outbound enqueue           */
+        UeBusy,              /* slot_filter.ue_free_only: a UE transmits in it (deliberate) */
         COUNT
     };
     static constexpr std::size_t kDropCount = static_cast<std::size_t>(Drop::COUNT);

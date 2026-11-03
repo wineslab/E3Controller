@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <libe3/libe3.hpp>
 
@@ -159,13 +160,32 @@ struct LoggingConfig {
     std::string latrec_dir;
 };
 
+/*
+ * Which captured uplink slots the slot codelet publishes. Sent to the codelet as
+ * its e3_slot_sel, so the gNB decides before any data moves: a slot left out
+ * costs the RAN no convert and no row write.
+ */
+struct SlotFilterConfig {
+    /* Publish only the slots no UE transmits in: the PHY expected no PUSCH,
+     * PUCCH or SRS reception in them. Empty slots reach the codelet only when
+     * the gNB captures them (expert_phy.allow_request_on_empty_uplink_slot). */
+    bool ue_free_only = false;
+
+    /* Slot indices within the 10 ms frame to publish. Empty = every slot. */
+    std::vector<uint32_t> slots;
+
+    /* `slots` as the selector's slot_mask: bit i = slot index i, 0 = every slot. */
+    uint64_t slot_mask() const;
+};
+
 struct ControllerConfig {
-    RadioGeometry radio;
-    ShmConfig     shm;
-    JbpfConfig    jbpf;
-    E3Config      e3;
-    ThreadConfig  threads;
-    LoggingConfig logging;
+    RadioGeometry    radio;
+    ShmConfig        shm;
+    JbpfConfig       jbpf;
+    E3Config         e3;
+    ThreadConfig     threads;
+    LoggingConfig    logging;
+    SlotFilterConfig slot_filter;
 
     /*
      * Legacy single-slot filter, kept for compatibility.

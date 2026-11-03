@@ -43,6 +43,7 @@ const char* E3SMLayer1::drop_name(Drop d) {
     case Drop::NoSubscribers:       return "no_subscribers";
     case Drop::EncodeFailed:        return "encode_failed";
     case Drop::EmitFailed:          return "emit_failed";
+    case Drop::UeBusy:              return "ue_busy";
     case Drop::COUNT:               break;
     }
     return "unknown";
@@ -335,6 +336,14 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
             return;
         }
     } else {
+        /* A slot the codelet skipped on purpose (slot_filter.ue_free_only): a
+         * UE transmits in it, so no row was written. Counted apart from the
+         * refusals below, which are faults. */
+        if ((s.flags & E3_SLOT_FLAG_UE_BUSY) != 0) {
+            note_drop(Drop::UeBusy);
+            return;
+        }
+
         /* gNB mode: no IQ crosses the jbpf ring — the helper already wrote the
          * row. What can go wrong here is the helper REFUSING, which it signals
          * with TRUNCATED and bytes_written == 0 rather than writing a partial

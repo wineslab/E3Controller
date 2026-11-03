@@ -229,7 +229,7 @@ void SlotIqPipeline::maybe_send_shm_cfg() {
                     cfg.name, cfg.epoch, cfg.nof_symbols, cfg.nof_subcarriers,
                     static_cast<double>(cfg.scale));
 
-        /* Also send a DEFAULT selector.
+        /* Also send the selector, from the YAML's slot_filter.
          *
          * The codelet keeps the selector in a jbpf array map, which is
          * zero-initialised and only written when a sel_in message arrives. The
@@ -239,18 +239,22 @@ void SlotIqPipeline::maybe_send_shm_cfg() {
          * Indication is published. "No selector configured" must mean "publish
          * everything", not "publish nothing".
          *
-         * slot_mask = 0 and sfn_mod = 0 are exactly that default. Workstream F
-         * will replace this with the union of the subscribers' slot sets. */
+         * slot_mask = 0, sfn_mod = 0 and ue_free_only = 0 are exactly that
+         * default. Workstream F will replace the YAML with the union of the
+         * subscribers' slot sets. */
         struct e3_slot_sel sel = {};
         sel.version             = E3_SLOT_SEL_VERSION;
         sel.nof_slots_per_frame = static_cast<uint16_t>(config_.radio.slots_per_frame());
-        sel.slot_mask           = 0;  /* publish every slot */
+        sel.slot_mask           = config_.slot_mask;  /* 0 = every slot */
         sel.sfn_mod             = 0;  /* every frame */
         sel.sfn_offset          = 0;
+        sel.ue_free_only        = config_.ue_free_only ? 1 : 0;
         int src = jbpf_io_channel_send_msg(io_ctx_, &slot_sel_stream_id_, &sel, sizeof(sel));
         if (src == 0) {
-            std::printf("[SlotIqPipeline] Sent default e3_slot_sel: publish all slots "
-                        "(%u slots/frame)\n", sel.nof_slots_per_frame);
+            std::printf("[SlotIqPipeline] Sent e3_slot_sel: slot_mask=0x%llx%s (%u slots/frame)\n",
+                        static_cast<unsigned long long>(sel.slot_mask),
+                        sel.ue_free_only ? ", only slots no UE transmits in" : "",
+                        sel.nof_slots_per_frame);
         } else {
             std::fprintf(stderr,
                 "[SlotIqPipeline] Failed to send default e3_slot_sel (rc=%d) — the gNB "

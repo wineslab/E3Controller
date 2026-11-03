@@ -165,6 +165,12 @@ public:
         /* Bumped by the controller whenever it recreates the region, so a helper
          * holding a stale mapping refuses rather than writing into it. */
         uint16_t shm_epoch{1};
+
+        /* The codelet's selector (e3config::SlotFilterConfig). slot_mask: bit i
+         * = publish slot index i, 0 = every slot. ue_free_only: publish only the
+         * slots no UE transmits in. */
+        uint64_t slot_mask{0};
+        bool     ue_free_only{false};
     };
 
     SlotIqPipeline(JbpfDispatcher& dispatcher, jbpf_io_ctx* io_ctx, Config cfg);
