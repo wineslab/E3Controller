@@ -60,6 +60,10 @@ logging:
   drops_log_path: ""           # empty disables the drop-accounting CSV
   latrec_dir: ""               # where stage-record rings go; needs --latrec
 
+slot_filter:
+  ue_free_only: false          # true = only the UL slots no UE transmits in
+  slots: []                    # slot indices within the frame; empty = every slot
+
 target_slot: -1                # -1 = every UL slot
 ```
 
@@ -98,7 +102,29 @@ radio:
 | `e3` | `encoding`, `link_layer`, `transport`, `setup_port`, `publisher_port`, `subscriber_port` | `encoding` is `asn1` or `json`; JSON/cuBB dApps expect ports 5555/5556/5557 |
 | `threads` | `poll_core`, `worker_core`, `publisher_core`, `poll_interval_us` | `-1` = no pinning (the poll thread then sleeps rather than busy-spinning) |
 | `logging` | `drops_log_path`, `latrec_dir` | Drop accounting, and where stage-record rings land ([Stage records](stage-records.md)) |
-| *(top level)* | `target_slot` | Forward only this slot index within a 10 ms frame; `-1` forwards every UL slot |
+| `slot_filter` | `ue_free_only`, `slots` | Which captured UL slots the gNB publishes, decided in the slot codelet before any IQ moves (see below) |
+| *(top level)* | `target_slot` | Forward only this slot index within a 10 ms frame; `-1` forwards every UL slot. Filters in the controller, after the gNB has published the slot; `slot_filter.slots` does the same in the gNB |
+
+### Sensing only the slots no UE transmits in (`slot_filter`)
+
+A sensing dApp often wants spectrum that no UE of the cell is using. With
+`slot_filter.ue_free_only: true` the gNB publishes only the uplink slots in
+which its PHY expects no PUSCH, PUCCH or SRS reception.
+- **Free slots cost nothing extra.** The slot codelet makes the decision in the
+  gNB, from counts the PHY passes with the slot, so a busy slot is never
+  converted or written.
+- **Busy slots are counted.** The codelet still reports each one, and the
+  controller counts them as `ue_busy` in its drop accounting, so free and busy
+  slots can be told apart in the run's numbers.
+- **The gNB must capture empty slots.** By default the gNB asks the RU only for
+  slots that have something scheduled, so an empty slot never reaches the
+  codelet. Set `expert_phy.allow_request_on_empty_uplink_slot: true` in the gNB
+  config (see ocudu's `README_JBPF.md`).
+- **Under full uplink load almost no slot is free.**
+
+`slot_filter.slots` picks slot indices within the 10 ms frame, in the gNB.
+For example, `[8, 9, 18]` leaves out slot 19, which holds the PRACH occasion
+with PRACH configuration index 159.
 
 ### Who writes the rows (`shm.writer`)
 

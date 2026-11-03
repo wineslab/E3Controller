@@ -329,6 +329,8 @@ int main(int argc, char** argv)
     slot_pipeline_cfg.shm_name          = config.shm.name;
     slot_pipeline_cfg.radio             = config.radio;
     slot_pipeline_cfg.cbf16_scale       = config.shm.cbf16_scale;
+    slot_pipeline_cfg.slot_mask         = config.slot_filter.slot_mask();
+    slot_pipeline_cfg.ue_free_only      = config.slot_filter.ue_free_only;
     e3sm_pipeline::SlotIqPipeline slot_iq_pipeline(dispatcher, io_ctx,
                                                    std::move(slot_pipeline_cfg));
 

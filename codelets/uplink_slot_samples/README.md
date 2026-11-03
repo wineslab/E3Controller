@@ -27,6 +27,8 @@ codelet reads through.
 | `sfn`, `subframe_id`, `slot_id` | slot identity (`slot_id` = index within the 10 ms frame) |
 | `ctx_id` | sector |
 | `nof_ports`, `nof_symbols`, `nof_subcarriers` | grid shape for THIS slot |
+| `valid_symbol_mask` | bit s = 1 if symbol s is uplink per the gNB's TDD pattern; 0 for DL and guard symbols of a mixed slot; all bits set on FDD |
+| `n_ue`, `n_pucch`, `n_srs_ue` | receptions the PHY expects in the slot: UEs with PUSCH, PUCCH receptions, SRS receptions. All 0 = no UE transmits in the slot; `0xFF` = unknown (the PHY does not hold the slot's requests) |
 
 The grid is `nof_ports x nof_symbols x nof_subcarriers` × `cbf16_t` (4 B), laid
 out `[port][symbol][subcarrier]`. For the 4×4 / 273 PRB / 30 kHz configuration
@@ -45,14 +47,35 @@ compared at configure time; a divergence would make the two writers disagree wit
 | `codelet_ts_ns` | `jbpf_time_get_ns()` at the **END** of the codelet — see §3 |
 | `bytes_written` | bytes the helper actually wrote; `0` means it refused |
 | `fh_buffer_index`, `fh_write_index` | the row the helper wrote — what the Indication carries |
-| `flags` | `E3_SLOT_FLAG_TRUNCATED` when the helper refused rather than writing a partial row |
+| `flags` | `E3_SLOT_FLAG_TRUNCATED` when the helper refused rather than writing a partial row; `E3_SLOT_FLAG_UE_BUSY` when the slot was skipped because a UE transmits in it |
 | `sfn`, `subframe_id`, `slot_id`, `sector_id` | slot identity |
 | `nof_ports`, `nof_symbols`, `nof_subcarriers` | grid shape, so the controller can validate against its config |
+| `valid_symbol_mask` | copied through from the ctx; the controller sends it to the dApp as `validSymbolMask` |
+| `n_ue`, `n_pucch`, `n_srs_ue` | copied through from the ctx |
+
+The row always holds every symbol of the slot. The mask only says which ones are real uplink, so a dApp can
+skip the DL and guard symbols of a mixed slot (they carry no uplink).
+
+### Publishing only the slots no UE transmits in
+
+The selector (`struct e3_slot_sel`, sent by the controller on `sel_in`) filters in
+two steps, both before any data moves:
+
+1. **Time.** `slot_mask` and `sfn_mod`/`sfn_offset` pick slots and frames. A slot
+   they drop sends nothing.
+2. **Who transmits.** With `ue_free_only` set, a slot whose `n_ue`, `n_pucch` or
+   `n_srs_ue` is not 0 is not converted or written, and the same goes for unknown
+   counts. The codelet still sends its descriptor with `E3_SLOT_FLAG_UE_BUSY` and
+   `bytes_written` 0, so the controller can count busy slots against free ones.
+
+Slots with nothing scheduled reach the hook only when the gNB captures them
+(`expert_phy.allow_request_on_empty_uplink_slot: true`; see ocudu's
+`README_JBPF.md`).
 
 ## 3. The timestamps — and the one that is easy to misread
 
-`codelet_ts_ns` is stamped at `uplink_slot_collect.c:220`, **after** the
-`jbpf_e3_publish_slot()` call at `:174-180`. So the controller's
+`codelet_ts_ns` is stamped at `uplink_slot_collect.c:246`, **after** the
+`jbpf_e3_publish_slot()` call at `:195-201`. So the controller's
 `gnb_to_codelet_us` column is **not** "hook → codelet entry", despite what its
 name suggests. It spans:
 
@@ -66,7 +89,7 @@ gnb_ts_ns          clock_gettime(CLOCK_MONOTONIC) immediately before the hook fi
   |                        +  the full 733,824-byte row write into /e3_ran_buffers
   |  descriptor field writes
   v
-codelet_ts_ns      jbpf_time_get_ns()  (uplink_slot_collect.c:220)
+codelet_ts_ns      jbpf_time_get_ns()  (uplink_slot_collect.c:246)
 ```
 
 **Read it as "gNB hands off the completed slot → the IQ is in shared memory."**

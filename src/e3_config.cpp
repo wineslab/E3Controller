@@ -192,7 +192,8 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
         return false;
     }
 
-    if (!check_keys(root, "<root>", {"radio", "shm", "jbpf", "e3", "threads", "logging", "target_slot"}, err)) {
+    if (!check_keys(root, "<root>",
+                    {"radio", "shm", "jbpf", "e3", "threads", "logging", "slot_filter", "target_slot"}, err)) {
         return false;
     }
 
@@ -290,6 +291,17 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
             get(n, "latrec_dir", out.logging.latrec_dir);
         }
 
+        /* ---- slot_filter ---- */
+        if (const auto n = root["slot_filter"]) {
+            if (!check_keys(n, "slot_filter", {"ue_free_only", "slots"}, err)) {
+                return false;
+            }
+            get(n, "ue_free_only", out.slot_filter.ue_free_only);
+            if (n["slots"]) {
+                out.slot_filter.slots = n["slots"].as<std::vector<uint32_t>>();
+            }
+        }
+
         get(root, "target_slot", out.target_slot);
     } catch (const std::exception& e) {
         err = std::string("error parsing '") + path + "': " + e.what();
@@ -330,7 +342,29 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
         return false;
     }
 
+    /* The codelet's slot_mask is 64 bits wide, so slot indices above 63 cannot
+     * be selected (numerology > 2). */
+    for (const uint32_t slot : out.slot_filter.slots) {
+        if (slot >= out.radio.slots_per_frame() || slot >= 64) {
+            std::ostringstream os;
+            os << "slot_filter.slots: " << slot << " is outside 0.." << (out.radio.slots_per_frame() - 1)
+               << " for " << out.radio.scs_khz << " kHz SCS — it would never match";
+            err = os.str();
+            return false;
+        }
+    }
+
     return true;
+}
+
+uint64_t
+SlotFilterConfig::slot_mask() const
+{
+    uint64_t mask = 0;
+    for (const uint32_t slot : slots) {
+        mask |= uint64_t{1} << slot;
+    }
+    return mask;
 }
 
 void
@@ -355,6 +389,12 @@ print_config(const ControllerConfig& cfg)
                 cfg.e3.subscriber_port);
     std::printf("  threads:    poll=%d worker=%d publisher=%d\n", cfg.threads.poll_core, cfg.threads.worker_core,
                 cfg.threads.publisher_core);
+    std::string slots = cfg.slot_filter.slots.empty() ? "all" : "";
+    for (const uint32_t slot : cfg.slot_filter.slots) {
+        slots += (slots.empty() ? "" : ",") + std::to_string(slot);
+    }
+    std::printf("  slot filter: slots %s%s (in the gNB codelet)\n", slots.c_str(),
+                cfg.slot_filter.ue_free_only ? ", only those no UE transmits in" : "");
     if (cfg.target_slot >= 0) {
         std::printf("  target_slot: %d (controller-side filter)\n", cfg.target_slot);
     }

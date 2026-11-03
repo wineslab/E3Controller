@@ -1,5 +1,5 @@
 /*
- * APER encoder implementation for L1-KPM Indication.
+ * APER encoder implementation for L1-KPM Indication, E3SM-L1-KPM version 2.
  *
  * Payload schema derived from NVIDIA Aerial's public E3 message schema
  * (see e3sm/asn/e3sm_layer1.asn for attribution).
@@ -12,14 +12,18 @@
  */
 
 #include "e3sm_layer1_wrapper.h"
+#include "e3sm_layer1_streams.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include "L1KPM-ShmRef.h"
+#include "L1KPM-CellData.h"
+#include "L1KPM-Delivery.h"
 #include "L1KPM-Indication.h"
 #include "L1KPM-RanFunctionData.h"
+#include "L1KPM-ShmRef.h"
+#include "L1KPM-StreamDescriptor.h"
 #include "aper_encoder.h"
 
 #ifdef __cplusplus
@@ -33,6 +37,130 @@ extern "C" {
 
 namespace e3sm_layer1 {
 
+namespace {
+
+/* Room for one indication: one cell and no UE list, well under 100 bytes. */
+constexpr size_t kIndicationMaxBytes = 256;
+
+/* Room for the RAN function data with all 80 stream descriptors, about 3 kB. */
+constexpr size_t kRanFunctionDataMaxBytes = 16384;
+
+/* Allocates an OPTIONAL member and sets it. ASN_STRUCT_FREE_CONTENTS_ONLY of the
+ * enclosing structure releases it. */
+template <typename T, typename V>
+bool set_optional(T*& field, V value)
+{
+    field = static_cast<T*>(std::calloc(1, sizeof(T)));
+    if (field == nullptr) {
+        return false;
+    }
+    *field = static_cast<T>(value);
+    return true;
+}
+
+bool set_octets(OCTET_STRING_t& field, const char* value)
+{
+    return OCTET_STRING_fromBuf(&field, value, static_cast<int>(std::strlen(value))) == 0;
+}
+
+bool set_octets(OCTET_STRING_t& field, const std::string& value)
+{
+    return OCTET_STRING_fromBuf(&field, value.data(), static_cast<int>(value.size())) == 0;
+}
+
+bool encode_aper(const asn_TYPE_descriptor_t& type, const void* value, size_t max_bytes, std::vector<uint8_t>& out)
+{
+    std::vector<uint8_t> buffer(max_bytes);
+    const asn_enc_rval_t ret = aper_encode_to_buffer(&type, nullptr, value, buffer.data(), buffer.size());
+    if (ret.encoded == -1) {
+        return false;
+    }
+    buffer.resize((static_cast<size_t>(ret.encoded) + 7) / 8);
+    out = std::move(buffer);
+    return true;
+}
+
+bool fill_indication(L1KPM_Indication_t& ind,
+                     uint64_t timestamp_ns,
+                     uint16_t sfn,
+                     uint16_t slot,
+                     const std::string& shm_name,
+                     uint8_t fh_buffer_index,
+                     uint32_t fh_write_index,
+                     uint16_t nof_ports,
+                     uint16_t valid_symbol_mask)
+{
+    // Slot scope: IDs 4, 5, 6 and 10. asn1c maps the unconstrained
+    // L1KPM-TimestampNs to `long`, which holds the uint64 ns of CLOCK_MONOTONIC
+    // on 64-bit Linux.
+    if (!set_optional(ind.timestamp, static_cast<long>(timestamp_ns)) || !set_optional(ind.sfn, sfn) ||
+        !set_optional(ind.slot, slot) || !set_optional(ind.nCells, 1)) {
+        return false;
+    }
+
+    // Cell scope: the one cell this RAN node serves.
+    ind.cells = static_cast<decltype(ind.cells)>(std::calloc(1, sizeof(*ind.cells)));
+    if (ind.cells == nullptr) {
+        return false;
+    }
+    auto* cell = static_cast<L1KPM_CellData_t*>(std::calloc(1, sizeof(L1KPM_CellData_t)));
+    if (cell == nullptr) {
+        return false;
+    }
+    if (ASN_SEQUENCE_ADD(&ind.cells->list, cell) != 0) {
+        std::free(cell);
+        return false;
+    }
+
+    // ID 1: the row of /e3_ran_buffers that holds the IQ samples of the slot.
+    cell->iqSamples = static_cast<L1KPM_ShmRef_t*>(std::calloc(1, sizeof(L1KPM_ShmRef_t)));
+    if (cell->iqSamples == nullptr || !set_octets(cell->iqSamples->shmName, shm_name)) {
+        return false;
+    }
+    cell->iqSamples->bufferIndex = fh_buffer_index;
+    cell->iqSamples->writeIndex  = fh_write_index;
+
+    // ID 8, INTEGER (1..64): the antennas the row holds.
+    if (nof_ports > 0 && !set_optional(cell->nRxAnt, nof_ports)) {
+        return false;
+    }
+
+    // ID 1000: the gNB's uplink symbols of this slot. Always set; 0 is valid
+    // (no uplink symbol).
+    return set_optional(cell->validSymbolMask, valid_symbol_mask & 0x3FFFu);
+}
+
+bool fill_stream(L1KPM_StreamDescriptor_t& d, const StreamInfo& stream, const IqStreamGeometry& iq)
+{
+    d.telemetryId = stream.telemetry_id;
+    if (!set_octets(d.streamId, stream.stream_id) || !set_octets(d.dataType, stream.data_type)) {
+        return false;
+    }
+
+    if (!is_served(stream.telemetry_id)) {
+        // The delivery is present only for an available stream.
+        d.status = L1KPM_StreamStatus_unavailable;
+        return true;
+    }
+
+    d.status   = L1KPM_StreamStatus_available;
+    d.delivery = static_cast<L1KPM_Delivery_t*>(std::calloc(1, sizeof(L1KPM_Delivery_t)));
+    if (d.delivery == nullptr) {
+        return false;
+    }
+    if (stream.telemetry_id == kTelemetryIqSamples) {
+        d.delivery->present = L1KPM_Delivery_PR_sharedMemory;
+        auto& shm           = d.delivery->choice.sharedMemory;
+        shm.memorySizeBytes = iq.buffer_bytes;
+        shm.numRows         = iq.num_rows;
+        return set_octets(shm.memoryKey, iq.shm_name);
+    }
+    d.delivery->present = L1KPM_Delivery_PR_protocolData;
+    return set_octets(d.delivery->choice.protocolData.keyword, stream.stream_id);
+}
+
+}  // namespace
+
 bool encode_iq_indication_aper(uint64_t timestamp_ns,
                                uint16_t sfn,
                                uint16_t slot,
@@ -40,107 +168,85 @@ bool encode_iq_indication_aper(uint64_t timestamp_ns,
                                uint8_t fh_buffer_index,
                                uint32_t fh_write_index,
                                uint16_t nof_ports,
+                               uint16_t valid_symbol_mask,
                                std::vector<uint8_t>& out)
 {
     L1KPM_Indication_t ind;
     std::memset(&ind, 0, sizeof(ind));
 
-    // iqSamplesRef is OPTIONAL on the wire but we always emit it — the dApp
-    // expects the shm coordinates on every indication.
-    ind.iqSamplesRef = static_cast<L1KPM_ShmRef_t*>(std::calloc(1, sizeof(L1KPM_ShmRef_t)));
-    if (!ind.iqSamplesRef) return false;
-
-    ind.iqSamplesRef->shmName.buf = static_cast<uint8_t*>(std::malloc(shm_name.size()));
-    if (!ind.iqSamplesRef->shmName.buf) {
-        ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_L1KPM_Indication, &ind);
-        return false;
-    }
-    std::memcpy(ind.iqSamplesRef->shmName.buf, shm_name.data(), shm_name.size());
-    ind.iqSamplesRef->shmName.size = static_cast<int>(shm_name.size());
-
-    ind.iqSamplesRef->fhBufferIndex = static_cast<long>(fh_buffer_index);
-    ind.iqSamplesRef->fhWriteIndex  = static_cast<long>(fh_write_index);
-
-    // asn1c maps unconstrained INTEGER to `long` here (not INTEGER_t), so we
-    // just assign. uint64 ns timestamps from jbpf_time_get_ns() fit in
-    // signed long on 64-bit Linux (long is 8 bytes); on a hypothetical
-    // 32-bit build the high bits would silently truncate.
-    ind.timestamp = static_cast<long>(timestamp_ns);
-
-    ind.sfn  = static_cast<long>(sfn);
-    ind.slot = static_cast<long>(slot);
-
-    // cellId left OPTIONAL-absent. nRxAnt carries the antenna count so a dApp
-    // knows how many antennas the shm row holds. asn1c maps OPTIONAL INTEGER
-    // to long*; the calloc'd member is freed by ASN_STRUCT_FREE_CONTENTS_ONLY.
-    if (nof_ports > 0) {
-        ind.nRxAnt = static_cast<long*>(std::calloc(1, sizeof(long)));
-        if (ind.nRxAnt) *ind.nRxAnt = static_cast<long>(nof_ports);
-    }
-
-    // Buffer sizing: payload is small (≈80 bytes including shm_name); 256 is
-    // comfortable headroom and matches the existing Spectrum encoders.
-    uint8_t buffer[256];
-    asn_enc_rval_t ret = aper_encode_to_buffer(
-        &asn_DEF_L1KPM_Indication, nullptr, &ind, buffer, sizeof(buffer));
-
-    bool ok = (ret.encoded != -1);
-    if (ok) {
-        const size_t bytes = (ret.encoded + 7) / 8;
-        out.assign(buffer, buffer + bytes);
-    }
+    const bool ok = fill_indication(ind, timestamp_ns, sfn, slot, shm_name, fh_buffer_index, fh_write_index,
+                                    nof_ports, valid_symbol_mask) &&
+                    encode_aper(asn_DEF_L1KPM_Indication, &ind, kIndicationMaxBytes, out);
 
     ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_L1KPM_Indication, &ind);
     return ok;
 }
 
-bool encode_ran_function_data_aper(std::vector<uint8_t>& out)
+bool encode_ran_function_data_aper(const IqStreamGeometry& iq, std::vector<uint8_t>& out)
 {
-    // L1KPM-RanFunctionData: {name, version, description}, the same shape and
-    // constraints as Spectrum-RanFunctionData, so a decoder of one reads the
-    // other; only the strings differ per SM.
     L1KPM_RanFunctionData_t rfd;
     std::memset(&rfd, 0, sizeof(rfd));
 
-    const char* name = LAYER1_RAN_FUNCTION_NAME;
-    rfd.name.buf = static_cast<uint8_t*>(std::malloc(std::strlen(name)));
-    if (!rfd.name.buf) return false;
-    std::memcpy(rfd.name.buf, name, std::strlen(name));
-    rfd.name.size = static_cast<int>(std::strlen(name));
-
     rfd.version = LAYER1_RAN_FUNCTION_VERSION;
+    bool ok = set_octets(rfd.name, LAYER1_RAN_FUNCTION_NAME) &&
+              set_octets(rfd.description, LAYER1_RAN_FUNCTION_DESCRIPTION);
 
-    const char* desc = LAYER1_RAN_FUNCTION_DESCRIPTION;
-    rfd.description.buf = static_cast<uint8_t*>(std::malloc(std::strlen(desc)));
-    if (!rfd.description.buf) {
-        std::free(rfd.name.buf);
-        return false;
-    }
-    std::memcpy(rfd.description.buf, desc, std::strlen(desc));
-    rfd.description.size = static_cast<int>(std::strlen(desc));
-
-    uint8_t buffer[256];
-    asn_enc_rval_t ret = aper_encode_to_buffer(
-        &asn_DEF_L1KPM_RanFunctionData, nullptr, &rfd, buffer, sizeof(buffer));
-
-    bool ok = (ret.encoded != -1);
-    if (ok) {
-        const size_t bytes = (ret.encoded + 7) / 8;
-        out.assign(buffer, buffer + bytes);
+    for (const StreamInfo& stream : kStreams) {
+        if (!ok) {
+            break;
+        }
+        auto* d = static_cast<L1KPM_StreamDescriptor_t*>(std::calloc(1, sizeof(L1KPM_StreamDescriptor_t)));
+        if (d == nullptr || ASN_SEQUENCE_ADD(&rfd.streams.list, d) != 0) {
+            std::free(d);
+            ok = false;
+            break;
+        }
+        ok = fill_stream(*d, stream, iq);
     }
 
-    std::free(rfd.name.buf);
-    std::free(rfd.description.buf);
+    ok = ok && encode_aper(asn_DEF_L1KPM_RanFunctionData, &rfd, kRanFunctionDataMaxBytes, out);
+
+    ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_L1KPM_RanFunctionData, &rfd);
     return ok;
 }
 
-bool encode_ran_function_data_json(std::vector<uint8_t>& out)
+bool encode_ran_function_data_json(const IqStreamGeometry& iq, std::vector<uint8_t>& out)
 {
     // ordered_json keeps the ASN.1 field order; plain json would sort the keys.
+    nlohmann::ordered_json streams = nlohmann::ordered_json::array();
+    for (const StreamInfo& stream : kStreams) {
+        nlohmann::ordered_json d = {
+            {"telemetryIdentifier", stream.telemetry_id},
+            {"stream_id",           stream.stream_id},
+            {"data_type",           stream.data_type},
+        };
+        if (!is_served(stream.telemetry_id)) {
+            d["status"] = "unavailable";
+        } else if (stream.telemetry_id == kTelemetryIqSamples) {
+            d["status"]          = "available";
+            d["delivery_method"] = {
+                {"transport_type", "shared_memory"},
+                {"shared_memory_info", {
+                    {"memory_key",        iq.shm_name},
+                    {"memory_size_bytes", iq.buffer_bytes},
+                    {"num_rows",          iq.num_rows},
+                }},
+            };
+        } else {
+            d["status"]          = "available";
+            d["delivery_method"] = {
+                {"transport_type", "protocolData"},
+                {"keyword",        stream.stream_id},
+            };
+        }
+        streams.push_back(std::move(d));
+    }
+
     nlohmann::ordered_json j = {
         {"name",        LAYER1_RAN_FUNCTION_NAME},
         {"version",     LAYER1_RAN_FUNCTION_VERSION},
         {"description", LAYER1_RAN_FUNCTION_DESCRIPTION},
+        {"streams",     std::move(streams)},
     };
     const std::string s = j.dump();
     out.assign(s.begin(), s.end());

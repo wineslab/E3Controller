@@ -111,7 +111,10 @@ static constexpr ebpf_context_descriptor_t g_ran_slot_descr = {
  * expectation deliberately rather than just bumping the number — a moved
  * data/data_end/meta_data offset also invalidates every compiled codelet. */
 static_assert(g_ran_ofh_descr.size == 27, "jbpf_ran_ofh_ctx layout changed (expected 27 B extent)");
-static_assert(g_ran_slot_descr.size == 47, "jbpf_ran_slot_ctx layout changed (expected 47 B extent)");
+/* 52 B: valid_symbol_mask (uint16_t) and then n_ue, n_pucch and n_srs_ue
+ * (uint8_t each) went in before `direction`, which is still the last field;
+ * data/data_end did not move. */
+static_assert(g_ran_slot_descr.size == 52, "jbpf_ran_slot_ctx layout changed (expected 52 B extent)");
 static_assert(g_ran_slot_descr.data == 0 && g_ran_slot_descr.end == 8, "jbpf_ran_slot_ctx data/data_end moved");
 static_assert(g_ran_ofh_descr.data == 0 && g_ran_ofh_descr.end == 8, "jbpf_ran_ofh_ctx data/data_end moved");
 

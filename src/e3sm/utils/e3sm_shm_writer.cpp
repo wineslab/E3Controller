@@ -119,6 +119,14 @@ ShmIqWriter::~ShmIqWriter() {
     close();
 }
 
+uint32_t ShmIqWriter::rows_per_buffer(size_t total_size, uint32_t row_bytes) {
+    if (row_bytes == 0 || total_size <= sizeof(SharedMemoryHeader)) {
+        return 0;
+    }
+    const size_t per_buf = (total_size - sizeof(SharedMemoryHeader)) / kNumBuffers;
+    return static_cast<uint32_t>(per_buf / row_bytes);
+}
+
 bool ShmIqWriter::open(const std::string& shm_name, size_t total_size,
                        const e3config::RadioGeometry& geom, float cbf16_scale,
                        e3config::ShmWriter writer) {
@@ -171,12 +179,9 @@ bool ShmIqWriter::open(const std::string& shm_name, size_t total_size,
     writer_         = writer;
     num_fh_samples_ = geom_.num_fh_samples();   // whole-row uint16 count
     row_bytes_      = geom_.row_bytes();
-    num_buffers_    = 2;                            // double-buffered ring
+    num_buffers_    = kNumBuffers;                  // double-buffered ring
 
-    size_t usable = (total_size > sizeof(SharedMemoryHeader))
-                    ? (total_size - sizeof(SharedMemoryHeader)) : 0;
-    size_t per_buf = usable / num_buffers_;
-    num_fh_rows_ = static_cast<uint32_t>(per_buf / row_bytes_);
+    num_fh_rows_ = rows_per_buffer(total_size, row_bytes_);
     if (num_fh_rows_ == 0) {
         std::fprintf(stderr,
             "[ShmIqWriter] SHM size %zu too small for one row (%u bytes) "

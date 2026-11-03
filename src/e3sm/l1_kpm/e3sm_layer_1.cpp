@@ -43,6 +43,7 @@ const char* E3SMLayer1::drop_name(Drop d) {
     case Drop::NoSubscribers:       return "no_subscribers";
     case Drop::EncodeFailed:        return "encode_failed";
     case Drop::EmitFailed:          return "emit_failed";
+    case Drop::UeBusy:              return "ue_busy";
     case Drop::COUNT:               break;
     }
     return "unknown";
@@ -237,10 +238,16 @@ std::vector<uint8_t> E3SMLayer1::ran_function_data() const {
     const libe3::EncodingFormat enc =
         agent_ ? agent_->config().encoding : libe3::EncodingFormat::ASN1;
 
+    // The IQ stream's buffer geometry, as the region will be laid out. libe3 asks
+    // for this data once before init() opens the region, so it is computed from
+    // the config rather than read from the open region.
+    const uint32_t                     rows = e3sm_spectrum::ShmIqWriter::rows_per_buffer(shm_size_, geom_.row_bytes());
+    const e3sm_layer1::IqStreamGeometry iq{shm_name_, rows * geom_.row_bytes(), rows};
+
     std::vector<uint8_t> encoded;
     bool ok = (enc == libe3::EncodingFormat::JSON)
-                ? e3sm_layer1::encode_ran_function_data_json(encoded)
-                : e3sm_layer1::encode_ran_function_data_aper(encoded);
+                ? e3sm_layer1::encode_ran_function_data_json(iq, encoded)
+                : e3sm_layer1::encode_ran_function_data_aper(iq, encoded);
     if (!ok) {
         std::fprintf(stderr, "[E3SMLayer1] Failed to encode RAN function data\n");
         return {};
@@ -329,6 +336,14 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
             return;
         }
     } else {
+        /* A slot the codelet skipped on purpose (slot_filter.ue_free_only): a
+         * UE transmits in it, so no row was written. Counted apart from the
+         * refusals below, which are faults. */
+        if ((s.flags & E3_SLOT_FLAG_UE_BUSY) != 0) {
+            note_drop(Drop::UeBusy);
+            return;
+        }
+
         /* gNB mode: no IQ crosses the jbpf ring — the helper already wrote the
          * row. What can go wrong here is the helper REFUSING, which it signals
          * with TRUNCATED and bytes_written == 0 rather than writing a partial
@@ -417,10 +432,10 @@ void E3SMLayer1::on_sample(const e3sm_pipeline::SlotSample& s) {
     const bool encoded_ok = want_json
         ? e3sm_layer1::encode_iq_indication_json(
               s.gnb_ts_ns, s.sfn, abs_slot, shm_name_,
-              fh_buf_idx, fh_write_idx, ports_clamped, encoded_buf_)
+              fh_buf_idx, fh_write_idx, ports_clamped, s.valid_symbol_mask, encoded_buf_)
         : e3sm_layer1::encode_iq_indication_aper(
               s.gnb_ts_ns, s.sfn, abs_slot, shm_name_,
-              fh_buf_idx, fh_write_idx, ports_clamped, encoded_buf_);
+              fh_buf_idx, fh_write_idx, ports_clamped, s.valid_symbol_mask, encoded_buf_);
 
     if (!encoded_ok) {
         std::fprintf(stderr,
