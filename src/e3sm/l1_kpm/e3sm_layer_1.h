@@ -22,6 +22,8 @@
 
 #include "e3sm/utils/e3sm_shm_writer.h"
 #include "e3sm/slot_iq_pipeline.h"
+#include "e3sm_layer1_streams.h"
+#include "e3sm_layer1_wrapper.h"
 
 #include <libe3/libe3.hpp>
 
@@ -32,6 +34,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -54,9 +57,12 @@ public:
     {}
 
     std::string name() const override { return "L1 KPM Service Model"; }
-    uint32_t    version() const override { return 1; }
+    uint32_t    version() const override { return LAYER1_RAN_FUNCTION_VERSION; }
     uint32_t    ran_function_id() const override { return RAN_FUNCTION_ID; }
-    std::vector<uint32_t> telemetry_ids() const override { return {1}; }
+    /* The identifiers this controller produces (E3SM-L1-KPM version 2). */
+    std::vector<uint32_t> telemetry_ids() const override {
+        return {std::begin(e3sm_layer1::kServedTelemetryIds), std::end(e3sm_layer1::kServedTelemetryIds)};
+    }
     std::vector<uint32_t> control_ids()   const override { return {}; }
 
     libe3::ErrorCode init() override;

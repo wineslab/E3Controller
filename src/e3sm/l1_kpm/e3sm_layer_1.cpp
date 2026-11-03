@@ -237,10 +237,16 @@ std::vector<uint8_t> E3SMLayer1::ran_function_data() const {
     const libe3::EncodingFormat enc =
         agent_ ? agent_->config().encoding : libe3::EncodingFormat::ASN1;
 
+    // The IQ stream's buffer geometry, as the region will be laid out. libe3 asks
+    // for this data once before init() opens the region, so it is computed from
+    // the config rather than read from the open region.
+    const uint32_t                     rows = e3sm_spectrum::ShmIqWriter::rows_per_buffer(shm_size_, geom_.row_bytes());
+    const e3sm_layer1::IqStreamGeometry iq{shm_name_, rows * geom_.row_bytes(), rows};
+
     std::vector<uint8_t> encoded;
     bool ok = (enc == libe3::EncodingFormat::JSON)
-                ? e3sm_layer1::encode_ran_function_data_json(encoded)
-                : e3sm_layer1::encode_ran_function_data_aper(encoded);
+                ? e3sm_layer1::encode_ran_function_data_json(iq, encoded)
+                : e3sm_layer1::encode_ran_function_data_aper(iq, encoded);
     if (!ok) {
         std::fprintf(stderr, "[E3SMLayer1] Failed to encode RAN function data\n");
         return {};

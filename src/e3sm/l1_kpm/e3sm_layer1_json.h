@@ -1,10 +1,14 @@
 /*
- * JSON encoder for the L1-KPM (RF=2) indication payload.
+ * JSON encoder for the L1-KPM (RF=2) indication payload, E3SM-L1-KPM version 2.
  *
  * The indicationMessage.protocolData JSON schema produced by
- * encode_iq_indication_json() — iq_samples{shm_name, fh_buffer_index,
- * fh_write_index}, timestamp, sfn, slot — is taken from NVIDIA Aerial's public
- * E3 message schema, so the stock NVIDIA Aerial dApps interoperate unchanged:
+ * encode_iq_indication_json() is the one of NVIDIA Aerial's public E3 message
+ * schema, version 1.2.0: slot-shared scalars at the root, everything of a cell in
+ * one entry of `cells`. The stock NVIDIA Aerial dApps read it as is:
+ *
+ *   {"timestamp", "sfn", "slot", "n_cells": 1,
+ *    "cells": [{"iq_samples": {"shm_name", "fh_buffer_index", "fh_write_index"},
+ *               "n_rx_ant", "valid_symbol_mask"}]}
  *
  *   https://github.com/NVIDIA/aerial-sample-apps
  *     dapps/docs/e3_message_schemas.json   (indicationMessage.protocolData)
@@ -34,14 +38,14 @@
 
 namespace e3sm_layer1 {
 
-// timestamp_ns   = codelet timestamp in nanoseconds (jbpf_time_get_ns()).
-// sfn            = 3GPP system frame number (codelet's frame_id, 0..255).
-// slot           = absolute slot index within the radio frame
-//                  (subframe_id * slots_per_subframe + slot_id).
+// timestamp_ns   = gNB hand-off timestamp in nanoseconds (CLOCK_MONOTONIC).
+// sfn            = 3GPP system frame number, 0..1023.
+// slot           = slot index within the radio frame, 0..159.
 // shm_name       = POSIX SHM segment name (e.g. "/e3_ran_buffers"); echoed
 //                  back so the dApp can sanity-check against its own mmap.
 // fh_buffer_*    = ring-buffer coordinates the dApp uses to address the row.
-// nof_ports      = number of RX antennas in the shm row (emitted as n_rx_ant).
+// nof_ports      = number of RX antennas in the shm row (emitted as n_rx_ant,
+//                  1..64; 0 leaves it out).
 // valid_symbol_mask = bit s set = symbol s is uplink per the gNB's TDD pattern
 //                  (emitted as valid_symbol_mask; DL/guard symbols are 0).
 bool encode_iq_indication_json(uint64_t timestamp_ns,

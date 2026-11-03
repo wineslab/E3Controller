@@ -331,3 +331,26 @@ if(E3C_BUILD_BENCH)
     RUNTIME_OUTPUT_DIRECTORY "${OUTPUT_DIR}/bin"
   )
 endif()
+
+# ---- Unit tests ----
+# Service Model codecs, no RAN needed. Run with ctest from the build directory,
+# or out/bin/test_l1_kpm_sm directly.
+option(E3C_BUILD_TESTS "Build the unit tests" OFF)
+
+if(E3C_BUILD_TESTS)
+  enable_testing()
+  add_executable(test_l1_kpm_sm
+    tests/test_l1_kpm_sm.cpp
+    src/e3sm/l1_kpm/e3sm_layer1_wrapper.cpp
+    src/e3sm/l1_kpm/e3sm_layer1_json.cpp
+  )
+  target_include_directories(test_l1_kpm_sm PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(test_l1_kpm_sm PRIVATE e3sm_asn libe3::libe3)
+  set_target_properties(test_l1_kpm_sm PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${OUTPUT_DIR}/bin"
+  )
+  # add_test is still the no-op macro defined above to keep jbpf's tests out
+  # (unset() does not remove a macro). CMake keeps the original command as
+  # _add_test.
+  _add_test(NAME l1_kpm_sm COMMAND test_l1_kpm_sm)
+endif()

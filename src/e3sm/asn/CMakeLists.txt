@@ -35,9 +35,28 @@ set(ASN1C_SRCS
     "${ASN1C_OUTPUT_DIR}/Spectrum-IQDataIndication.c"
     "${ASN1C_OUTPUT_DIR}/Spectrum-PRBBlacklistControl.c"
     "${ASN1C_OUTPUT_DIR}/Spectrum-RanFunctionData.c"
+    # E3SM-L1-KPM version 2: every top-level type of e3sm_layer1.asn.
+    "${ASN1C_OUTPUT_DIR}/L1KPM-Float32.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-Complex32.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-Uint32.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-Rnti.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-PhysCellId.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-SymbolBitmap.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-TelemetryId.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-TimestampNs.c"
     "${ASN1C_OUTPUT_DIR}/L1KPM-ShmRef.c"
     "${ASN1C_OUTPUT_DIR}/L1KPM-Indication.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-CellData.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-UeData.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-SubscriptionData.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-UeRef.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-ControlData.c"
     "${ASN1C_OUTPUT_DIR}/L1KPM-RanFunctionData.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-StreamDescriptor.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-StreamStatus.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-Delivery.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-SharedMemoryInfo.c"
+    "${ASN1C_OUTPUT_DIR}/L1KPM-InlineInfo.c"
 )
 
 # Generate ASN.1 C code at configure time, then remove runtime files

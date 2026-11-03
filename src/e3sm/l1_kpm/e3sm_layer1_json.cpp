@@ -20,24 +20,31 @@ bool encode_iq_indication_json(uint64_t timestamp_ns,
                                uint16_t valid_symbol_mask,
                                std::vector<uint8_t>& out)
 {
-    // Field set + key spelling per NVIDIA aerial-sample-apps
-    // dapps/docs/e3_message_examples.json indicationMessage.protocolData. The dApp reads
-    // sfn/slot at protocolData top level (payload.value("sfn"/"slot", 0u))
-    // and forwards them to the visualizer for TDD-aligned rendering.
-    // n_rx_ant tells the dApp how many antennas the shm row holds;
-    // valid_symbol_mask which symbols are uplink (DL/guard symbols of a mixed
-    // slot are 0), the same key as OAI's L1-KPM SM.
-    nlohmann::json j = {
-        {"timestamp", timestamp_ns},
-        {"sfn",       sfn},
-        {"slot",      slot},
-        {"n_rx_ant",  nof_ports},
-        {"valid_symbol_mask", valid_symbol_mask},
+    // Field set + key spelling per E3SM-L1-KPM version 2, which takes NVIDIA's
+    // schema v1.2.0: timestamp, sfn, slot and n_cells at the root, the rest of
+    // the one cell this RAN node serves in cells[0]. The dApp matches sfn/slot
+    // against other telemetry of the slot and forwards them to the visualizer
+    // for TDD-aligned rendering. n_rx_ant tells it how many antennas the shm row
+    // holds; valid_symbol_mask which symbols are uplink (DL/guard symbols of a
+    // mixed slot are 0).
+    nlohmann::json cell = {
         {"iq_samples", {
             {"shm_name",        shm_name},
             {"fh_buffer_index", fh_buffer_index},
             {"fh_write_index",  fh_write_index},
         }},
+        {"valid_symbol_mask", valid_symbol_mask},
+    };
+    if (nof_ports > 0) {
+        cell["n_rx_ant"] = nof_ports;
+    }
+
+    nlohmann::json j = {
+        {"timestamp", timestamp_ns},
+        {"sfn",       sfn},
+        {"slot",      slot},
+        {"n_cells",   1},
+        {"cells",     nlohmann::json::array({cell})},
     };
     std::string s = j.dump();
     out.assign(s.begin(), s.end());

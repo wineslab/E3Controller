@@ -56,6 +56,9 @@ static_assert(sizeof(SharedMemoryHeader) == 64, "SHM header layout drift");
 
 class ShmIqWriter {
 public:
+    // Buffers in the region: rows alternate between the two.
+    static constexpr uint32_t kNumBuffers = 2;
+
     ShmIqWriter() = default;
     ~ShmIqWriter();
 
@@ -109,6 +112,12 @@ public:
                            uint16_t nof_ports,
                            uint8_t& out_buffer_index,
                            uint32_t& out_write_index);
+
+    // Rows in each of the two buffers of a region of `total_size` bytes, as open()
+    // lays it out: the header, then two buffers of whole rows of `row_bytes`.
+    // 0 when not even one row fits. Usable before the region exists, e.g. to
+    // advertise the buffer geometry in the RAN function data.
+    static uint32_t rows_per_buffer(size_t total_size, uint32_t row_bytes);
 
     uint32_t num_fh_rows()   const { return num_fh_rows_; }
     uint32_t num_buffers()   const { return num_buffers_; }

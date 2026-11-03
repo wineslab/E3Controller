@@ -95,8 +95,9 @@ data-plane pipelines at the `src/e3sm/` root and the ASN.1 grammars in `asn/`.
 | `src/e3sm/sm_spectrum/e3sm_spect_wrapper.{h,cpp}` | C++ wrappers around the Spectrum ASN.1 types (incl. PRB blacklist control decode) |
 | `src/e3sm/l1_kpm/e3sm_layer_1.{h,cpp}` | L1-KPM SM (RF=2) — SHM-pointer IQ indications in the configured encoding (JSON or APER) via SlotIqPipeline; writes the optional drop-accounting CSV |
 | `src/e3sm/l1_kpm/e3sm_layer1_json.{h,cpp}` | JSON encoder for the L1-KPM (RF=2) indication — `e3sm_layer1::encode_iq_indication_json`, NVIDIA-Aerial-conformant `protocolData` |
-| `src/e3sm/l1_kpm/e3sm_layer1_wrapper.{h,cpp}` | APER encoder for `L1KPM-Indication`, and the L1-KPM RanFunctionData: `L1KPM-RanFunctionData` over APER, the same fields as a JSON object over JSON |
+| `src/e3sm/l1_kpm/e3sm_layer1_wrapper.{h,cpp}` | APER encoder for `L1KPM-Indication`, and the L1-KPM RanFunctionData: `L1KPM-RanFunctionData` with one stream descriptor per telemetry identifier, over APER, or the same fields as a JSON object over JSON |
+| `src/e3sm/l1_kpm/e3sm_layer1_streams.h` | The telemetry identifiers of E3SM-L1-KPM version 2 (stream name, data type), and the ones the controller produces |
 | `src/e3sm/utils/e3sm_shm_writer.{h,cpp}` | Creates, sizes and headers the POSIX shm region `/e3_ran_buffers` that the gNB writes the rows into — owned by `E3SMLayer1` |
 | `src/e3sm/utils/bfp_decompress.{h,cpp}` | BFP-9 → int16 IQ decompression — called from `IqPipeline::dispatch_sample` |
 | `src/e3sm/asn/e3sm_spectrum.asn` | ASN.1 definitions for Spectrum SM (`Spectrum-IQDataIndication`, `Spectrum-PRBBlacklistControl`, `Spectrum-RanFunctionData`, `Spectrum-ConfigControl`) |
-| `src/e3sm/asn/e3sm_layer1.asn` | ASN.1 definitions for L1-KPM SM (`L1KPM-ShmRef`, `L1KPM-Indication`, `L1KPM-RanFunctionData`) — module `L1-KPM-SM`; derived from NVIDIA's E3 schema; the same grammar as OAI's L1-KPM SM (`e3sm_l1_kpm.asn`) |
+| `src/e3sm/asn/e3sm_layer1.asn` | ASN.1 definitions for L1-KPM SM — module `E3SM-L1-KPM-IEs`, the grammar of the E3SM-L1-KPM specification version 2 (`L1KPM-Indication`, `L1KPM-CellData`, `L1KPM-UeData`, `L1KPM-RanFunctionData`, ...); derived from NVIDIA's E3 schema v1.2.0 |
