@@ -103,10 +103,62 @@ on the outbound leg. So:
   outbound thread stamped `DEQUEUE` → `ENCODE_E3AP_DONE` → `SEND_DONE`.
 
 Two steps, because the outbound leg is split across the two threads that perform
-it. There is no shared message identifier doing this work: E3AP's `message_id`
-wraps at 1000, and while libe3 ≥ 0.1.2 surfaces it to a *dApp* calling
-`send_control`/`send_report`, it is still not visible on the Service Model emit
-path this SM uses.
+it. E3AP's `message_id` does not do this work on the indication path: it is not
+visible on the Service Model emit path this SM uses. On the control path it is
+the join key, see [The PRB block loop](#the-prb-block-loop).
+
+## The PRB block loop
+
+With `prb_block.enabled`, a dApp's PRB block closes a loop through the gNB: the
+gNB captures an uplink slot, the dApp reads it and decides, the controller hands
+the block to the gNB, and the scheduler applies it. The stage names are the ones
+OAI's Spectrum SM stamps for the same control, so the two gNBs compare stage for
+stage. Every stamp reads `CLOCK_MONOTONIC` on one host, so the loop is a
+subtraction across three processes' rings:
+
+| | Stage | Ring | Key |
+|---|---|---|---|
+| T0 | `RECORD_BEGIN`, t = `gnb_ts_ns`: the gNB hook of the slot | `e3controller.l1_kpm` | aux = sfn << 16 \| slot |
+| T1 | `PROCESS_DONE`: the dApp's decision on that slot | the dApp's | seq = sfn << 16 \| slot |
+| T2 | `EMIT_ENTER` (aux = the slot key) → `SEND_DONE` | the dApp's | seq = E3 message id |
+| T3 | `RECV`, `DECODE_E3AP_DONE` (aux = message id, aux2 = 6) | `libe3.inbound` | |
+| | `DECODE_E3SM_BEGIN` → `DECODE_E3SM_DONE` (aux = PRBs) | `libe3.inbound` | seq = message id |
+| | `DEQUEUE` (aux = blocks it superseded) | `e3controller.prb_block` | seq = message id |
+| T4 | `APPLY_CONTROL_DONE`: in the gNB's control input (aux = ok) | `e3controller.prb_block` | seq = message id |
+| | `ACK_SENT`, then libe3's `EMIT_ENTER` … `SEND_DONE` of the ACK | `e3controller.prb_block`, `libe3.outbound` | seq / aux = message id |
+| T5 | `LIVE_ON_AIR`: the first scheduler slot that applies the block, back-dated to the codelet's time; aux = that slot's sfn << 16 \| slot, aux2 = blocks coalesced into it | `e3controller.prb_block_gnb` | seq = message id |
+| | `ACK_RECV` | the dApp's | seq = message id |
+
+- **The loop is T5 − T0**: from the gNB's capture of the slot the dApp decided
+  on to the scheduler slot that applies the block. T4 → T5 is the wait for the
+  scheduler's next slot, at most one slot plus the jbpf hop.
+- **On air.** The applied slot's DL goes on air with the block; new UL grants
+  avoid it from k2 slots later (k2 ≥ 4 in ocudu), so UL is under the block from
+  the first UL slot at least k2 slots after it. The slot numbers of T0 and T5
+  give that distance in air time: (T5 slot − T0 slot) × the slot duration. With
+  7 DL and 2 UL slots and k2 = 4, the UL distance depends on which of the two
+  UL slots the dApp read: 4 or 12 slots more than the DL one.
+- **One difference from OAI.** OAI's `APPLY_CONTROL_DONE` is the install in its
+  MAC; ours is the hand-off into the gNB, which the next scheduler slot picks up.
+  Both ACK at that point.
+- **Superseded blocks** have no `LIVE_ON_AIR`: a newer block replaced them in the
+  controller's queue (`DEQUEUE.aux`) or in the same scheduler slot
+  (`LIVE_ON_AIR.aux2` > 1).
+- **The gNB-side stamp is back-dated** like A1, into a ring of its own so that
+  its times still ascend.
+
+`tools/latrec_closed_loop.py` joins the rings: the dApp's by its slot key and
+the E3 message id, the controller's by the message id. Point the controller and
+the dApp at two latrec directories, then:
+
+```bash
+python3 tools/latrec_closed_loop.py --ctrl <controller latrec_dir> --dapp <dApp latrec_dir> --csv loop.csv
+```
+
+It prints p50/p90/p99/max for every segment and the loop in air slots, and
+writes one row per control. It reads the dApp's records as its native E3
+backend stamps them (the default), where `EMIT_ENTER` and `SEND_DONE` carry the
+message id as seq.
 
 ## Ring sizing and the capture window
 

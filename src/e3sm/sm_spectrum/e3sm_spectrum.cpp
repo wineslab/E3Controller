@@ -1,15 +1,27 @@
 /*
- * E3SMSpectrum — RF=1. IQ telemetry via IqPipeline (ecpri_iq_samples) + PRB-
- * blacklist control. See the header for the contract. PRB-blacklist application
- * to the RAN is still a stub (logged as a TODO in handle_control_action).
+ * E3SMSpectrum — RF=1. PRB blacklist control, applied in the gNB's scheduler
+ * through PrbBlockRelay when prb_block.enabled; otherwise the legacy IQ
+ * telemetry via IqPipeline (ecpri_iq_samples). See the header for the contract.
  */
 
 #include "e3sm_spectrum.h"
+
+#include <libe3/latrec.h>
 
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+
+// aux2 of the decode stages, as OAI's Spectrum SM stamps them.
+static constexpr uint64_t kPduDAppControl = static_cast<uint64_t>(libe3::PduType::DAPP_CONTROL_ACTION);
+
+// CLOCK_MONOTONIC in ns, the clock of the stage records and of the gNB.
+static uint64_t monotonic_now_ns() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+}
 
 libe3::ErrorCode E3SMSpectrum::init() {
     // Register the pipeline consumer once at SM registration. IqPipeline keeps
@@ -17,6 +29,10 @@ libe3::ErrorCode E3SMSpectrum::init() {
     // defer start() to the first dApp subscription without losing the wiring.
     pipeline_.register_consumer(
         [this](const e3sm_pipeline::DecompressedSample& s) { on_sample(s); });
+    // The relay ACKs a block once it is in the gNB, from the main loop.
+    if (prb_block_ != nullptr) {
+        prb_block_->set_ack_handler([this](uint32_t id, bool ok) { send_ack(id, ok); });
+    }
     return libe3::ErrorCode::SUCCESS;
 }
 
@@ -24,6 +40,18 @@ void E3SMSpectrum::destroy() { stop(); }
 
 libe3::ErrorCode E3SMSpectrum::start() {
     if (running_.load(std::memory_order_acquire)) {
+        return libe3::ErrorCode::SUCCESS;
+    }
+
+    // prb_block.enabled: the SM serves the PRB block control only. The prb_block
+    // codelet goes into the gNB's scheduler; no IQ telemetry on RF=1 (the
+    // L1-KPM SM carries the IQ).
+    if (prb_block_ != nullptr) {
+        if (!prb_block_->start()) {
+            return libe3::ErrorCode::INTERNAL_ERROR;
+        }
+        running_.store(true, std::memory_order_release);
+        std::printf("[E3SMSpectrum] Started - prb_block codelet loaded, PRB blocks go to the gNB's scheduler\n");
         return libe3::ErrorCode::SUCCESS;
     }
 
@@ -54,7 +82,18 @@ libe3::ErrorCode E3SMSpectrum::start() {
 void E3SMSpectrum::stop() {
     if (!running_.load(std::memory_order_acquire)) return;
     running_.store(false, std::memory_order_release);
+    if (prb_block_ != nullptr) {
+        // Unloading the codelet clears the block in the gNB, as OAI clears it
+        // when its Spectrum SM stops.
+        prb_block_->stop();
+        return;
+    }
     pipeline_.stop();
+}
+
+void E3SMSpectrum::send_ack(uint32_t id, bool ok) {
+    emit_outbound(make_message_ack_pdu(
+        id, ok ? libe3::ResponseCode::POSITIVE : libe3::ResponseCode::NEGATIVE));
 }
 
 std::vector<uint8_t> E3SMSpectrum::ran_function_data() const {
@@ -212,16 +251,25 @@ libe3::ErrorCode E3SMSpectrum::handle_control_action(
     uint32_t request_message_id,
     const libe3::DAppControlAction& action)
 {
+    // Stamped as OAI's Spectrum SM stamps them, on libe3's inbound thread (its
+    // libe3.inbound ring), seq = the control's E3 message id. A NACK sent here
+    // gets ACK_SENT here; an accepted block gets it from PrbBlockRelay.
+    const uint64_t rx_ns = monotonic_now_ns();
+    latrec_tstamp(request_message_id, LATREC_DECODE_E3SM_BEGIN, action.action_data.size(), kPduDAppControl);
+    auto reject = [&](libe3::ErrorCode rc) {
+        send_ack(request_message_id, false);
+        latrec_tstamp(request_message_id, LATREC_ACK_SENT,
+                      static_cast<uint64_t>(libe3::ResponseCode::NEGATIVE), 0);
+        return rc;
+    };
+
     // Only the PRB blacklist control (id 1) is handled. OAI's Spectrum SM also
     // has 2 (sensing policy), 3 (sensing reservation) and 4 (PUSCH slots).
     if (action.control_identifier != CONTROL_ID_PRB_BLACKLIST) {
         std::fprintf(stderr,
             "[E3SMSpectrum] Rejected control id %u from dApp %u: only %u (PRB blacklist) is handled\n",
             action.control_identifier, action.dapp_identifier, CONTROL_ID_PRB_BLACKLIST);
-        auto nack = make_message_ack_pdu(request_message_id,
-                                         libe3::ResponseCode::NEGATIVE);
-        emit_outbound(std::move(nack));
-        return libe3::ErrorCode::SM_ERROR_INVALID_PARAM;
+        return reject(libe3::ErrorCode::SM_ERROR_INVALID_PARAM);
     }
 
     // The control comes in the agent's encoding, as on OAI's gNB: a JSON run
@@ -243,34 +291,44 @@ libe3::ErrorCode E3SMSpectrum::handle_control_action(
         std::fprintf(stderr,
             "[E3SMSpectrum] Rejected %s control from dApp %u: %s\n",
             json ? "JSON" : "APER", action.dapp_identifier, why.c_str());
-        auto nack = make_message_ack_pdu(request_message_id,
-                                         libe3::ResponseCode::NEGATIVE);
-        emit_outbound(std::move(nack));
-        if (result == e3sm_spectrum::DecodeResult::unsupported) {
-            return libe3::ErrorCode::SM_ERROR_INVALID_PARAM;
+        return reject(result == e3sm_spectrum::DecodeResult::unsupported
+                          ? libe3::ErrorCode::SM_ERROR_INVALID_PARAM
+                          : libe3::ErrorCode::DECODE_FAILED);
+    }
+    latrec_tstamp(request_message_id, LATREC_DECODE_E3SM_DONE, ctrl.blacklisted_prbs.size(), kPduDAppControl);
+
+    if (prb_block_ == nullptr) {
+        // prb_block.enabled is false: decoded and ACKed, not applied.
+        std::printf("[E3SMSpectrum] PRBBlacklistControl from dApp %u (not applied, prb_block.enabled is false): prbs=[",
+                    action.dapp_identifier);
+        for (std::size_t i = 0; i < ctrl.blacklisted_prbs.size(); ++i) {
+            std::printf("%s%d", i > 0 ? ", " : "", ctrl.blacklisted_prbs[i]);
         }
-        return libe3::ErrorCode::DECODE_FAILED;
+        std::printf("]\n");
+        send_ack(request_message_id, true);
+        latrec_tstamp(request_message_id, LATREC_ACK_SENT,
+                      static_cast<uint64_t>(libe3::ResponseCode::POSITIVE), 0);
+        return libe3::ErrorCode::SUCCESS;
     }
 
-    std::printf("[E3SMSpectrum] PRBBlacklistControl from dApp %u: prbs=[",
-                action.dapp_identifier);
-    for (std::size_t i = 0; i < ctrl.blacklisted_prbs.size(); ++i) {
-        std::printf("%s%d", i > 0 ? ", " : "", ctrl.blacklisted_prbs[i]);
+    // Every PRB must be on the carrier. validityPeriod and samplingThreshold
+    // are ignored, as on OAI: a block lasts until the next one replaces it.
+    for (const int prb : ctrl.blacklisted_prbs) {
+        if (prb < 0 || static_cast<uint32_t>(prb) >= nof_prbs_) {
+            std::fprintf(stderr,
+                "[E3SMSpectrum] Rejected PRB block from dApp %u: PRB %d is outside the carrier's 0..%u\n",
+                action.dapp_identifier, prb, nof_prbs_ - 1);
+            return reject(libe3::ErrorCode::SM_ERROR_INVALID_PARAM);
+        }
     }
-    std::printf("]");
-    if (ctrl.sampling_threshold.has_value()) {
-        std::printf(" samplingThreshold=%d", ctrl.sampling_threshold.value());
-    }
-    if (ctrl.validity_period.has_value()) {
-        std::printf(" validityPeriod=%d", ctrl.validity_period.value());
-    }
-    std::printf("\n");
 
-    // TODO: Apply the PRB blacklist to the RAN. Currently an ACK-and-log
-    // stub; flagged in docs/known-limitations.md.
-
-    auto ack = make_message_ack_pdu(request_message_id,
-                                    libe3::ResponseCode::POSITIVE);
-    emit_outbound(std::move(ack));
+    if (!prb_block_->submit(request_message_id, ctrl.blacklisted_prbs, rx_ns)) {
+        std::fprintf(stderr,
+            "[E3SMSpectrum] Rejected PRB block from dApp %u: the prb_block codelet is not loaded, "
+            "or too many blocks are waiting for the gNB\n",
+            action.dapp_identifier);
+        return reject(libe3::ErrorCode::INTERNAL_ERROR);
+    }
+    // PrbBlockRelay ACKs it once the block is in the gNB.
     return libe3::ErrorCode::SUCCESS;
 }

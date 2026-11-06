@@ -55,7 +55,7 @@ message(STATUS "e3sm_asn: BOOLEAN runtime from ${LIBE3_ASN1_INCLUDE_DIR}/BOOLEAN
 # routines via the libe3 runtime.
 #
 # The Spectrum types are the ones the controller uses: the RAN function data,
-# the dApp control envelope (with both of its alternatives, which a CHOICE needs)
+# the dApp control envelope (with all of its alternatives, which a CHOICE needs)
 # and the legacy IQ indication. The other types in the grammar (dApp report,
 # xApp control, apply outcome, sensing indication) are generated but not
 # compiled: the controller relays reports and controls as opaque bytes.
@@ -65,6 +65,8 @@ set(ASN1C_SRCS
     "${ASN1C_OUTPUT_DIR}/Spectrum-DAppControlPayload.c"
     "${ASN1C_OUTPUT_DIR}/Spectrum-PRBBlacklistControl.c"
     "${ASN1C_OUTPUT_DIR}/Spectrum-SensingPolicyControl.c"
+    "${ASN1C_OUTPUT_DIR}/Spectrum-SensingReservationControl.c"
+    "${ASN1C_OUTPUT_DIR}/Spectrum-SensingPuschSlotsControl.c"
     "${ASN1C_OUTPUT_DIR}/Spectrum-IQDataIndication.c"
     # E3SM-L1-KPM version 1: every top-level type of e3sm_layer1.asn.
     "${ASN1C_OUTPUT_DIR}/L1KPM-Float32.c"

@@ -264,6 +264,8 @@ add_executable(e3_controller
   # RF=1 Spectrum SM (PRB-blacklist / spectrum sharing)
   src/e3sm/sm_spectrum/e3sm_spectrum.cpp
   src/e3sm/sm_spectrum/e3sm_spect_wrapper.cpp
+  # the PRB block's way into the gNB's scheduler
+  src/e3sm/prb_block_relay.cpp
   # RF=2 L1-KPM SM (NVIDIA-Aerial-conformant indications)
   src/e3sm/l1_kpm/e3sm_layer_1.cpp
   src/e3sm/l1_kpm/e3sm_layer1_wrapper.cpp

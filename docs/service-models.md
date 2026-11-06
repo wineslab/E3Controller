@@ -85,13 +85,14 @@ it nests the object as JSON.
 
 ## Spectrum (RF=1)
 
-The grammar, `src/e3sm/asn/e3sm_spectrum.asn`, is the Spectrum Service Model of
-OAI's E2SM-DAPP bridge, copied unchanged from wineslab/spear-flexric
-(`src/sm/dapp_sm/e3/service_models/spectrum_sm/asn/defs/e3sm_spectrum.asn`).
-Keep it identical to that file: the dApp, the controller and the xApp all encode
-its types. The adaptive_cpu dApp's copy (`spectrum_report_sm`) agrees with it on
-reports and controls. OAI's gNB has a third copy whose `Spectrum-PRBBlacklistReport`
-is extensible; it does not matter there, because the gNB never decodes a report.
+The grammar, `src/e3sm/asn/e3sm_spectrum.asn`, is OAI's gNB Spectrum Service
+Model, copied unchanged from its
+`openair2/E3AP/service_models/spectrum_sm/MESSAGES/ASN1/V1/e3sm_spectrum.asn`
+(commit c2fc976521). It is the grammar the adaptive_cpu dApp speaks with OAI's
+gNB, so the same dApp works with both. Compared with the E2SM-DAPP bridge's copy
+it adds the cell configuration indication, the sensing reservation and capture
+PUSCH slot controls, and an extensible `Spectrum-PRBBlacklistReport`; the
+controller relays reports without decoding them.
 
 One section at the end is the controller's own: `Spectrum-IQDataIndication`, the
 indication of the **obsolete** eCPRI IQ path (the `ecpri_iq_samples` codelet). Its
@@ -105,9 +106,14 @@ What the controller encodes and decodes itself:
 | dApp control (id 1, PRB blacklist) | `Spectrum-DAppControlData` | `{"controlType":"prbBlacklist","controlPayload":{"prbBlacklistControl":{"blacklistedPRBs":[...]}}}`, as OAI's gNB takes it |
 | IQ indication (legacy) | `Spectrum-IQDataIndication` | not sent |
 
-The other alternatives of `Spectrum-DAppControlPayload` (a sensing policy, for
-example) are refused with a NACK. Controls are acknowledged but not applied yet,
-see [Known limitations](known-limitations.md).
+The other alternatives of `Spectrum-DAppControlPayload` (a sensing policy,
+sensing slot reservation or capture PUSCH slots) are refused with a NACK. With
+`prb_block.enabled` the PRB blacklist is applied in the gNB's scheduler, as OAI
+applies it: every data allocation avoids the listed PRBs in every slot, UL and
+DL, until the next control replaces the list, and an empty list clears it. The
+ACK follows once the block is in the gNB. See
+[Usage](usage.md#blocking-the-prbs-a-dapp-detected-prb_block) and
+[Known limitations](known-limitations.md#prb-block-data-channels-only).
 
 `Spectrum-SensingPolicyControl` has a BOOLEAN, and libe3 ships no BOOLEAN runtime,
 so `src/e3sm/asn/CMakeLists.txt` compiles asn1c's own (only while libe3 has none).
