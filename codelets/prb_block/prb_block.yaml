@@ -1,0 +1,21 @@
+codeletset_id: prb_block
+
+codelet_descriptor:
+
+  - codelet_name: block
+    codelet_path: ${JBPF_CODELETS}/prb_block/prb_block.o
+    hook_name: sched_prb_block
+    priority: 1
+    # The E3Controller builds the load request programmatically
+    # (src/e3sm/prb_block_relay.cpp), so these are here for reference and for
+    # jbpf_lcm_cli users -- keep the names and stream ids in sync with both.
+    #
+    #   block_in     e3_prb_block_msg      -- the PRBs a dApp asked to block
+    #   applied_out  e3_prb_block_applied  -- the slot that first applied a block
+    in_io_channel:
+      - name: block_in
+        stream_id: "7531abcd1234567890fedcba0987657a"
+    out_io_channel:
+      - name: applied_out
+        stream_id: "7531abcd1234567890fedcba0987657b"
+        forward_destination: DestinationNone

@@ -2,8 +2,9 @@
 
 Two RAN functions, each fed by its own jbpf codelet through its own data-plane
 pipeline. The `JbpfDispatcher` runs a single poll loop and routes each jbpf
-buffer to the right pipeline by `stream_id`. Only the slot path (RF=2) is
-current; the section path (RF=1, dashed) is obsolete.
+buffer to the right pipeline by `stream_id`. The slot path (RF=2) carries the
+IQ; the section path (RF=1, dashed) is obsolete. RF=1 now carries the PRB block
+control into the gNB's scheduler (see [The PRB block path](#the-prb-block-path-rf1-control)).
 
 ```
 ┌─────────────────────────────────── ocudu gNB + jbpf (IPC secondary) ───────────────────────────────────┐
@@ -32,17 +33,17 @@ current; the section path (RF=1, dashed) is obsolete.
   └╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘                  └──────────────────────────────────────────┘
            const DecompressedSample&                                       const SlotSample&
                        ▼                                                            ▼
-  ┌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐                  ┌──────────────────────────────────────────┐
-  ╎ E3SMSpectrum  (RF=1, sm_spectrum/)     ╎                  │ E3SMLayer1   (RF=2, l1_kpm/)             │
-  ╎ - FFT zero-pad the UL section          ╎                  │ - owns /e3_ran_buffers: creates, sizes   │
-  ╎ - emit APER Spectrum-IQDataIndication  ╎                  │   and headers it (ShmIqWriter)           │
-  ╎   (ASN.1 only), IQ in-band             ╎                  │ - checks the geometry on the 1st slot    │
-  ╎ - PRB-blacklist control + RanFuncData  ╎                  │ - emit L1KPM-Indication with the row,    │
-  ╎ - fan out to RF=1 subscribers          ╎                  │   in config().encoding (JSON or APER)    │
-  ╎ OBSOLETE: the SM needs updating        ╎                  │ - no controls                            │
-  ╎                                        ╎                  │ - fan out to RF=2 subscribers            │
-  └╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘                  └──────────────────────────────────────────┘
-     → public Spectrum Sharing dApps                             → NVIDIA-Aerial L1-KPM dApps, which
+  ┌────────────────────────────────────────┐                  ┌──────────────────────────────────────────┐
+  │ E3SMSpectrum  (RF=1, sm_spectrum/)     │                  │ E3SMLayer1   (RF=2, l1_kpm/)             │
+  │ - PRB-blacklist control: decode, check │                  │ - owns /e3_ran_buffers: creates, sizes   │
+  │   it, PrbBlockRelay -> the gNB's       │                  │   and headers it (ShmIqWriter)           │
+  │   scheduler (prb_block.enabled, below) │                  │ - checks the geometry on the 1st slot    │
+  │ - else the legacy IQ: FFT zero-pad,    │                  │ - emit L1KPM-Indication with the row,    │
+  │   APER Spectrum-IQDataIndication       │                  │   in config().encoding (JSON or APER)    │
+  │ - RanFuncData, in config().encoding    │                  │ - no controls                            │
+  │ - fan out to RF=1 subscribers          │                  │ - fan out to RF=2 subscribers            │
+  └────────────────────────────────────────┘                  └──────────────────────────────────────────┘
+     → spectrum-sharing dApps                                    → NVIDIA-Aerial L1-KPM dApps, which
                                                                    read the row from /e3_ran_buffers
 ```
 
@@ -81,6 +82,33 @@ The `JbpfDispatcher` is the central routing component:
 
 ## Key Components
 
+## The PRB block path (RF=1 control)
+
+A spectrum-sharing dApp sends a Spectrum PRB blacklist control (RF=1, control 1)
+with the PRBs where it detected an incumbent. With `prb_block.enabled` the gNB
+keeps every data allocation off them, in every slot, UL and DL, as OAI's gNB
+does:
+
+```
+dApp ──E3 DAppControlAction (RF=1, control 1)──► E3SMSpectrum, libe3 inbound thread
+                                                 decode, check the PRBs are on the carrier
+                                                          │ PrbBlockRelay::submit()
+                                                          ▼
+                                                 PrbBlockRelay, main loop: newest block
+                                                 → control input block_in, then ACK
+                                                          │ jbpf IPC
+                                                          ▼
+ocudu scheduler, every slot of every cell, before any allocation:
+  ctrl hook sched_prb_block → codelet prb_block returns the block in force
+  → the grid reports the blocked PRBs as used to PDSCH and PUSCH allocators
+  first slot with a new block → applied_out ──► PrbBlockRelay: LIVE_ON_AIR stage
+```
+
+The ACK means what OAI's does: the block is in the RAN, not yet applied. With
+no codelet loaded the hook returns "no block", so unloading it, on the last
+RF=1 unsubscribe or at shutdown, clears the block. The stage records of the
+whole loop are in [Stage records](stage-records.md#the-prb-block-loop).
+
 Service-model code is grouped under `src/e3sm/` by component: `sm_spectrum/`
 (RF=1), `l1_kpm/` (RF=2), `utils/` (writers + decompression), with the shared
 data-plane pipelines at the `src/e3sm/` root and the ASN.1 grammars in `asn/`.
@@ -91,7 +119,9 @@ data-plane pipelines at the `src/e3sm/` root and the ASN.1 grammars in `asn/`.
 | `include/jbpf_dispatcher.h` | Central buffer dispatcher — routes by stream_id, releases buffers |
 | `src/e3sm/iq_pipeline.{h,cpp}` | **Obsolete.** RF=1 data plane — `ecpri_iq_samples` codelet load, SPSC queue, worker, BFP-9 decompression → `DecompressedSample` |
 | `src/e3sm/slot_iq_pipeline.{h,cpp}` | RF=2 data plane — `uplink_slot_samples` codelet load, `e3_shm_cfg` / `e3_slot_sel` to the codelet, SPSC queue, worker; each `e3_slot_desc` → `SlotSample` (row indices, no IQ) |
-| `src/e3sm/sm_spectrum/e3sm_spectrum.{h,cpp}` | **Obsolete, needs updating.** Spectrum SM (RF=1) — ecpri_iq IQ telemetry (APER `Spectrum-IQDataIndication`, ASN.1 only) via IqPipeline + PRB blacklist control + descriptive RanFunctionData |
+| `src/e3sm/sm_spectrum/e3sm_spectrum.{h,cpp}` | Spectrum SM (RF=1) — PRB blacklist control, applied in the gNB's scheduler through PrbBlockRelay (`prb_block.enabled`), + RanFunctionData; without `prb_block.enabled`, the **obsolete** ecpri_iq IQ telemetry (APER `Spectrum-IQDataIndication`, ASN.1 only) via IqPipeline |
+| `src/e3sm/prb_block_relay.{h,cpp}` | The PRB block's way into the gNB — `prb_block` codelet load/unload, block → control input `block_in` from the main loop, ACK, the codelet's `applied_out` reports and their stage records |
+| `src/e3sm/prb_block_msg.h` | Builds the `e3_prb_block_msg` (275-bit mask) from a decoded control |
 | `src/e3sm/sm_spectrum/e3sm_spect_wrapper.{h,cpp}` | C++ wrappers around the Spectrum ASN.1 types (incl. PRB blacklist control decode) |
 | `src/e3sm/l1_kpm/e3sm_layer_1.{h,cpp}` | L1-KPM SM (RF=2) — SHM-pointer IQ indications in the configured encoding (JSON or APER) via SlotIqPipeline; writes the optional drop-accounting CSV |
 | `src/e3sm/l1_kpm/e3sm_layer1_json.{h,cpp}` | JSON encoder for the L1-KPM (RF=2) indication — `e3sm_layer1::encode_iq_indication_json`, NVIDIA-Aerial-conformant `protocolData` |
@@ -99,5 +129,5 @@ data-plane pipelines at the `src/e3sm/` root and the ASN.1 grammars in `asn/`.
 | `src/e3sm/l1_kpm/e3sm_layer1_streams.h` | The telemetry identifiers of E3SM-L1-KPM version 2 (stream name, data type), and the ones the controller produces |
 | `src/e3sm/utils/e3sm_shm_writer.{h,cpp}` | Creates, sizes and headers the POSIX shm region `/e3_ran_buffers` that the gNB writes the rows into — owned by `E3SMLayer1` |
 | `src/e3sm/utils/bfp_decompress.{h,cpp}` | BFP-9 → int16 IQ decompression — called from `IqPipeline::dispatch_sample` |
-| `src/e3sm/asn/e3sm_spectrum.asn` | ASN.1 definitions for Spectrum SM (`Spectrum-IQDataIndication`, `Spectrum-PRBBlacklistControl`, `Spectrum-RanFunctionData`, `Spectrum-ConfigControl`) |
+| `src/e3sm/asn/e3sm_spectrum.asn` | ASN.1 definitions for Spectrum SM — OAI's gNB grammar (`Spectrum-DAppControlData` with `Spectrum-PRBBlacklistControl`, `Spectrum-RanFunctionData`, reports, xApp controls, ...) plus the controller's legacy `Spectrum-IQDataIndication` |
 | `src/e3sm/asn/e3sm_layer1.asn` | ASN.1 definitions for L1-KPM SM — module `E3SM-L1-KPM-IEs`, the grammar of the E3SM-L1-KPM specification version 2 (`L1KPM-Indication`, `L1KPM-CellData`, `L1KPM-UeData`, `L1KPM-RanFunctionData`, ...); derived from NVIDIA's E3 schema v1.2.0 |

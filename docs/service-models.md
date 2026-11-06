@@ -4,7 +4,7 @@ The controller serves two RAN functions, one Service Model each:
 
 | RAN function | Service model | Code | For | Encodings |
 |---|---|---|---|---|
-| RF=1 | Spectrum (**obsolete**: needs updating before use) | `src/e3sm/sm_spectrum/` | public Spectrum Sharing dApps | ASN.1 (APER) only |
+| RF=1 | Spectrum (OAI's grammar) | `src/e3sm/sm_spectrum/` | dApps that report PRBs to an xApp; the legacy IQ path | JSON or ASN.1 (APER); the legacy IQ indication APER only |
 | RF=2 | L1-KPM | `src/e3sm/l1_kpm/` | L1 spectrum sensing | JSON or ASN.1 (APER) |
 
 How they are fed is in [Architecture](architecture.md); what they do not do yet
@@ -82,6 +82,44 @@ telemetry identifier of the specification
 libe3 0.2.x writes `ranFunctionData` as a hex string of these bytes in a JSON
 setup response. With [wineslab/libe3#118](https://github.com/wineslab/libe3/pull/118)
 it nests the object as JSON.
+
+## Spectrum (RF=1)
+
+The grammar, `src/e3sm/asn/e3sm_spectrum.asn`, is OAI's gNB Spectrum Service
+Model, copied unchanged from its
+`openair2/E3AP/service_models/spectrum_sm/MESSAGES/ASN1/V1/e3sm_spectrum.asn`
+(commit c2fc976521). It is the grammar the adaptive_cpu dApp speaks with OAI's
+gNB, so the same dApp works with both. Compared with the E2SM-DAPP bridge's copy
+it adds the cell configuration indication, the sensing reservation and capture
+PUSCH slot controls, and an extensible `Spectrum-PRBBlacklistReport`; the
+controller relays reports without decoding them.
+
+One section at the end is the controller's own: `Spectrum-IQDataIndication`, the
+indication of the **obsolete** eCPRI IQ path (the `ecpri_iq_samples` codelet). Its
+bytes are unchanged from the previous grammar, and it goes away with that path.
+
+What the controller encodes and decodes itself:
+
+| Message | APER (`asn1`) | JSON (`json`) |
+|---|---|---|
+| RAN function data | `Spectrum-RanFunctionData` | `{"name":"spectrum_sm","version":1,"description":"..."}` |
+| dApp control (id 1, PRB blacklist) | `Spectrum-DAppControlData` | `{"controlType":"prbBlacklist","controlPayload":{"prbBlacklistControl":{"blacklistedPRBs":[...]}}}`, as OAI's gNB takes it |
+| IQ indication (legacy) | `Spectrum-IQDataIndication` | not sent |
+
+The other alternatives of `Spectrum-DAppControlPayload` (a sensing policy,
+sensing slot reservation or capture PUSCH slots) are refused with a NACK. With
+`prb_block.enabled` the PRB blacklist is applied in the gNB's scheduler, as OAI
+applies it: every data allocation avoids the listed PRBs in every slot, UL and
+DL, until the next control replaces the list, and an empty list clears it. The
+ACK follows once the block is in the gNB. See
+[Usage](usage.md#blocking-the-prbs-a-dapp-detected-prb_block) and
+[Known limitations](known-limitations.md#prb-block-data-channels-only).
+
+`Spectrum-SensingPolicyControl` has a BOOLEAN, and libe3 ships no BOOLEAN runtime,
+so `src/e3sm/asn/CMakeLists.txt` compiles asn1c's own (only while libe3 has none).
+It generates the types with libe3's codec set (`-no-gen-BER -no-gen-JER
+-no-gen-OER`), because libe3's `asn_config.h` decides the layout of every type
+table.
 
 ## Adding a New Service Model
 

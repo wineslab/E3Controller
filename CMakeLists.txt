@@ -264,6 +264,8 @@ add_executable(e3_controller
   # RF=1 Spectrum SM (PRB-blacklist / spectrum sharing)
   src/e3sm/sm_spectrum/e3sm_spectrum.cpp
   src/e3sm/sm_spectrum/e3sm_spect_wrapper.cpp
+  # the PRB block's way into the gNB's scheduler
+  src/e3sm/prb_block_relay.cpp
   # RF=2 L1-KPM SM (NVIDIA-Aerial-conformant indications)
   src/e3sm/l1_kpm/e3sm_layer_1.cpp
   src/e3sm/l1_kpm/e3sm_layer1_wrapper.cpp
@@ -334,7 +336,7 @@ endif()
 
 # ---- Unit tests ----
 # Service Model codecs, no RAN needed. Run with ctest from the build directory,
-# or out/bin/test_l1_kpm_sm directly.
+# or out/bin/test_l1_kpm_sm and out/bin/test_spectrum_sm directly.
 option(E3C_BUILD_TESTS "Build the unit tests" OFF)
 
 if(E3C_BUILD_TESTS)
@@ -349,8 +351,18 @@ if(E3C_BUILD_TESTS)
   set_target_properties(test_l1_kpm_sm PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${OUTPUT_DIR}/bin"
   )
+  add_executable(test_spectrum_sm
+    tests/test_spectrum_sm.cpp
+    src/e3sm/sm_spectrum/e3sm_spect_wrapper.cpp
+  )
+  target_include_directories(test_spectrum_sm PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(test_spectrum_sm PRIVATE e3sm_asn libe3::libe3)
+  set_target_properties(test_spectrum_sm PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${OUTPUT_DIR}/bin"
+  )
   # add_test is still the no-op macro defined above to keep jbpf's tests out
   # (unset() does not remove a macro). CMake keeps the original command as
   # _add_test.
   _add_test(NAME l1_kpm_sm COMMAND test_l1_kpm_sm)
+  _add_test(NAME spectrum_sm COMMAND test_spectrum_sm)
 endif()
