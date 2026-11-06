@@ -193,7 +193,7 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
     }
 
     if (!check_keys(root, "<root>",
-                    {"radio", "shm", "jbpf", "e3", "threads", "logging", "slot_filter", "target_slot"}, err)) {
+                    {"radio", "shm", "jbpf", "e3", "threads", "logging", "slot_filter", "prb_block", "target_slot"}, err)) {
         return false;
     }
 
@@ -302,6 +302,14 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
             }
         }
 
+        /* ---- prb_block ---- */
+        if (const auto n = root["prb_block"]) {
+            if (!check_keys(n, "prb_block", {"enabled"}, err)) {
+                return false;
+            }
+            get(n, "enabled", out.prb_block.enabled);
+        }
+
         get(root, "target_slot", out.target_slot);
     } catch (const std::exception& e) {
         err = std::string("error parsing '") + path + "': " + e.what();
@@ -395,6 +403,9 @@ print_config(const ControllerConfig& cfg)
     }
     std::printf("  slot filter: slots %s%s (in the gNB codelet)\n", slots.c_str(),
                 cfg.slot_filter.ue_free_only ? ", only those no UE transmits in" : "");
+    std::printf("  prb block:  %s\n", cfg.prb_block.enabled
+                                           ? "on (dApp PRB blocks go to the gNB's scheduler; no IQ on RF=1)"
+                                           : "off (RF=1 is the legacy eCPRI IQ path; blocks are not applied)");
     if (cfg.target_slot >= 0) {
         std::printf("  target_slot: %d (controller-side filter)\n", cfg.target_slot);
     }

@@ -16,6 +16,7 @@
  */
 
 #include "e3sm/sm_spectrum/e3sm_spect_wrapper.h"
+#include "e3sm/prb_block_msg.h"
 
 extern "C" {
 #include "Spectrum-DAppControlData.h"
@@ -194,6 +195,32 @@ static void test_control_aper_rejections()
     const std::vector<uint8_t> sensing_policy(buffer, buffer + (ret.encoded + 7) / 8);
     check(decode_spectrum_dapp_control_aper(sensing_policy, decoded, why) == DecodeResult::unsupported,
           "a sensing policy is unsupported, not malformed");
+
+    // The two alternatives OAI's grammar added after it: a sensing slot
+    // reservation (control 3) and the capture PUSCH slots (control 4).
+    std::memset(&envelope, 0, sizeof(envelope));
+    envelope.controlPayload.present = Spectrum_DAppControlPayload_PR_sensingReservationControl;
+    long* reserved = (long*)calloc(1, sizeof(long));
+    *reserved      = 19;
+    ASN_SEQUENCE_ADD(&envelope.controlPayload.choice.sensingReservationControl.reservedSlots.list, reserved);
+    ret = aper_encode_to_buffer(&asn_DEF_Spectrum_DAppControlData, NULL, &envelope, buffer, sizeof(buffer));
+    ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_Spectrum_DAppControlData, &envelope);
+    check(ret.encoded > 0, "a sensing reservation envelope encodes");
+    const std::vector<uint8_t> reservation(buffer, buffer + (ret.encoded + 7) / 8);
+    check(decode_spectrum_dapp_control_aper(reservation, decoded, why) == DecodeResult::unsupported,
+          "a sensing reservation is unsupported, not malformed");
+
+    std::memset(&envelope, 0, sizeof(envelope));
+    envelope.controlPayload.present = Spectrum_DAppControlPayload_PR_sensingPuschSlotsControl;
+    long* pusch_slot = (long*)calloc(1, sizeof(long));
+    *pusch_slot      = 8;
+    ASN_SEQUENCE_ADD(&envelope.controlPayload.choice.sensingPuschSlotsControl.puschSlots.list, pusch_slot);
+    ret = aper_encode_to_buffer(&asn_DEF_Spectrum_DAppControlData, NULL, &envelope, buffer, sizeof(buffer));
+    ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_Spectrum_DAppControlData, &envelope);
+    check(ret.encoded > 0, "a capture PUSCH slots envelope encodes");
+    const std::vector<uint8_t> pusch_slots(buffer, buffer + (ret.encoded + 7) / 8);
+    check(decode_spectrum_dapp_control_aper(pusch_slots, decoded, why) == DecodeResult::unsupported,
+          "capture PUSCH slots are unsupported, not malformed");
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +286,45 @@ static void test_control_json()
           "samplingThreshold 101 is malformed");
 }
 
+// ---------------------------------------------------------------------------
+// The block the controller sends the gNB's prb_block codelet
+// ---------------------------------------------------------------------------
+
+static bool mask_bit(const struct e3_prb_block_msg& msg, unsigned prb)
+{
+    return (msg.mask[prb / 64] >> (prb % 64)) & 1ULL;
+}
+
+static void test_prb_block_msg()
+{
+    std::printf("PRB block message to the gNB\n");
+
+    const struct e3_prb_block_msg msg = e3sm_pipeline::make_prb_block_msg(42, {0, 63, 64, 100, 100, 272}, 1234);
+    check(msg.id == 42 && msg.version == E3_PRB_BLOCK_VERSION && msg.ctrl_rx_ns == 1234, "id, version, receive time");
+    check(msg.n_prbs == 5, "5 PRBs: the repeated 100 counts once");
+    check(mask_bit(msg, 0) && mask_bit(msg, 63) && mask_bit(msg, 64) && mask_bit(msg, 100) && mask_bit(msg, 272),
+          "  bits 0, 63, 64, 100, 272 set (words 0, 0, 1, 1, 4)");
+    unsigned set = 0;
+    for (unsigned prb = 0; prb < E3_PRB_BLOCK_MAX_PRBS; prb++) {
+        set += mask_bit(msg, prb) ? 1 : 0;
+    }
+    check(set == 5, "  and no other bit");
+    check(msg.mask[0] == ((1ULL << 0) | (1ULL << 63)) && msg.mask[1] == ((1ULL << 0) | (1ULL << 36)) &&
+              msg.mask[4] == (1ULL << 16),
+          "  bit p is word p / 64, bit p % 64");
+
+    const struct e3_prb_block_msg clear = e3sm_pipeline::make_prb_block_msg(43, {}, 0);
+    check(clear.n_prbs == 0, "an empty list is a clear");
+    check(clear.mask[0] == 0 && clear.mask[4] == 0, "  with no bit set");
+
+    const struct e3_prb_block_msg outside = e3sm_pipeline::make_prb_block_msg(44, {-1, 275, 1000, 7}, 0);
+    check(outside.n_prbs == 1 && mask_bit(outside, 7), "PRBs outside the mask are dropped");
+
+    check(sizeof(struct e3_prb_block_msg) == 56 && sizeof(struct e3_prb_block_slot) == 56 &&
+              sizeof(struct e3_prb_block_applied) == 32,
+          "message sizes 56 / 56 / 32 B, the same in the codelet and the gNB");
+}
+
 int main()
 {
     test_iq_indication_bytes_unchanged();
@@ -266,6 +332,7 @@ int main()
     test_control_aper_vectors();
     test_control_aper_rejections();
     test_control_json();
+    test_prb_block_msg();
 
     if (g_failures > 0) {
         std::printf("%d check(s) FAILED\n", g_failures);

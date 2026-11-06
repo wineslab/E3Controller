@@ -11,21 +11,36 @@ a single encoding, `ServiceModel::ran_function_data()` and the indication
 fan-out simply read `E3Agent::config().encoding` — no per-dApp encoding lookup,
 no race during simultaneous setup.
 
-Note that **RF=1 Spectrum is ASN.1/APER-only** — there is no JSON encoder for its
-in-band IQ indication, so it is only useful under `e3.encoding: asn1` (under
-`json` the SM warns once and drops indications). **RF=2 L1-KPM**
+Note that **RF=1's legacy IQ indication is ASN.1/APER-only** — there is no JSON
+encoder for it, so it is only useful under `e3.encoding: asn1` (under `json` the
+SM warns once and drops indications). The RF=1 PRB block control works in both. **RF=2 L1-KPM**
 supports both encodings.
 
-## Missing PRB blacklist control
+## PRB block: data channels only
 
-`E3SMSpectrum::handle_control_action()` (RF=1) decodes the dApp's
-`Spectrum-DAppControlData`, in the agent's encoding, logs the requested PRB list,
-and sends a POSITIVE ACK back to the dApp. The actual application of the
-blacklist to the RAN scheduler is not implemented: the
-`// TODO: Apply the PRB blacklist to the RAN` line in
-[`src/e3sm/sm_spectrum/e3sm_spectrum.cpp`](../src/e3sm/sm_spectrum/e3sm_spectrum.cpp)
-marks the spot. dApps that rely on the control side-effect (rather than just the
-ACK) will not see scheduler behaviour change.
+With `prb_block.enabled`, a dApp's PRB block reaches the gNB's scheduler (see
+[Usage](usage.md#blocking-the-prbs-a-dapp-detected-prb_block)). Against OAI's gNB,
+which applies the same control:
+
+- **Only data allocations avoid the blocked PRBs**: PDSCH and PUSCH, including
+  SIB1, RAR, Msg3, Msg4 and paging. PUCCH, PDCCH, SSB, PRACH, SRS and CSI-RS
+  keep their PRBs, even inside a blocked range. OAI also keeps SSB, PRACH and
+  SRS there; it additionally avoids PDCCH CCEs, drops SR and CSI PUCCH
+  occasions, skips CSI-RS on blocked PRBs and moves PUCCH and CSI-RS away with
+  an RRC reconfiguration.
+- **Attach.** Connected UEs keep their PUCCH and PDCCH. A block that leaves no
+  room for SIB1, RAR, Msg4 or paging inside CORESET#0's PRBs stops new attaches
+  until it shrinks.
+- **Grants decided before the block's first slot still go on air**: DL up to
+  `max_processing_delay_slots` later (2.5 ms at 30 kHz with ocudu's default of
+  5), UL up to k2 (at most 11) slots after that.
+- **UE grants are contiguous**, so a block in mid-band leaves a UE one side of
+  it. A HARQ retransmission that no longer fits waits until HARQ gives up.
+- **No expiry**, as on OAI: `validityPeriod` and `samplingThreshold` are
+  ignored. A killed controller leaves the codelet loaded, and the last block in
+  force, until the gNB restarts.
+- **The dApp learns only the ACK.** When each block took effect is in the
+  controller's `[PrbBlockRelay]` line, the gNB log and the stage records.
 
 ## Slot buffer size is compile-time in the codelet
 

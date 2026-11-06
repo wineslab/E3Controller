@@ -13,8 +13,9 @@
  * these codelets. codelets/Makefile.common treats its exit status as fatal.
  *
  * Registers, on top of jbpf's built-in program/helper/map tables:
- *   - program type jbpf_ran_ofh  (ecpri_iq_samples)
- *   - program type jbpf_ran_slot (uplink_slot_samples)
+ *   - program type jbpf_ran_ofh       (ecpri_iq_samples)
+ *   - program type jbpf_ran_slot      (uplink_slot_samples)
+ *   - program type jbpf_ran_mac_sched (prb_block)
  *   - helper prototypes for the two E3 helpers in jbpf_e3_ids.h
  *
  * Usage: e3_verifier_cli <codelet.o> [section] [--asm <out.asm>]
@@ -39,6 +40,7 @@ extern "C" {
 }
 
 #include "jbpf_e3_ids.h"
+#include "jbpf_e3_prb_block_api.h"
 
 /* ------------------------------------------------------------------ *
  *  Context descriptors, derived from the ocudu contract header
@@ -107,6 +109,15 @@ static constexpr ebpf_context_descriptor_t g_ran_slot_descr = {
     kNoMetaRegion,
 };
 
+/* The scheduler's control hook sched_prb_block (prb_block). ocudu's own MAC
+ * scheduler ctx, unchanged: data..data_end is the hook's e3_prb_block_slot. */
+static constexpr ebpf_context_descriptor_t g_ran_mac_sched_descr = {
+    CTX_EXTENT(struct jbpf_mac_sched_ctx, rnti),
+    static_cast<int>(offsetof(struct jbpf_mac_sched_ctx, data)),
+    static_cast<int>(offsetof(struct jbpf_mac_sched_ctx, data_end)),
+    kNoMetaRegion,
+};
+
 /* Tripwires: if either fires, the RAN-side ctx layout changed. Re-derive the
  * expectation deliberately rather than just bumping the number — a moved
  * data/data_end/meta_data offset also invalidates every compiled codelet. */
@@ -117,6 +128,9 @@ static_assert(g_ran_ofh_descr.size == 27, "jbpf_ran_ofh_ctx layout changed (expe
 static_assert(g_ran_slot_descr.size == 52, "jbpf_ran_slot_ctx layout changed (expected 52 B extent)");
 static_assert(g_ran_slot_descr.data == 0 && g_ran_slot_descr.end == 8, "jbpf_ran_slot_ctx data/data_end moved");
 static_assert(g_ran_ofh_descr.data == 0 && g_ran_ofh_descr.end == 8, "jbpf_ran_ofh_ctx data/data_end moved");
+static_assert(g_ran_mac_sched_descr.size == 40, "jbpf_mac_sched_ctx layout changed (expected 40 B extent)");
+static_assert(g_ran_mac_sched_descr.data == 0 && g_ran_mac_sched_descr.end == 8,
+              "jbpf_mac_sched_ctx data/data_end moved");
 
 /* ------------------------------------------------------------------ *
  *  Helper prototypes
@@ -230,8 +244,9 @@ static void
 register_e3_extensions()
 {
     /* Program types. Lookup is by ELF section prefix, first match wins
-     * (jbpf_platform.cpp:45-58). "jbpf_ran_ofh" and "jbpf_ran_slot" are not
-     * prefixes of one another, so registration order is not load-bearing. */
+     * (jbpf_platform.cpp:45-58). "jbpf_ran_ofh", "jbpf_ran_slot" and
+     * "jbpf_ran_mac_sched" are not prefixes of one another, so registration
+     * order is not load-bearing. */
     EbpfProgramType ran_ofh;
     ran_ofh.name                   = "jbpf_ran_ofh";
     ran_ofh.context_descriptor     = &g_ran_ofh_descr;
@@ -247,6 +262,14 @@ register_e3_extensions()
     ran_slot.section_prefixes       = {JBPF_E3_SEC_RAN_SLOT};
     ran_slot.is_privileged          = false;
     jbpf_verifier_register_program_type(JBPF_E3_PROG_TYPE_RAN_SLOT, ran_slot);
+
+    EbpfProgramType ran_mac_sched;
+    ran_mac_sched.name                   = "jbpf_ran_mac_sched";
+    ran_mac_sched.context_descriptor     = &g_ran_mac_sched_descr;
+    ran_mac_sched.platform_specific_data = JBPF_PROG_TYPE_RAN_MAC_SCHED;
+    ran_mac_sched.section_prefixes       = {JBPF_E3_SEC_RAN_MAC_SCHED};
+    ran_mac_sched.is_privileged          = false;
+    jbpf_verifier_register_program_type(JBPF_PROG_TYPE_RAN_MAC_SCHED, ran_mac_sched);
 
     /* Close the gap between jbpf's built-ins and our custom range BEFORE
      * registering ours, so no zeroed entry is ever reachable. See the comment

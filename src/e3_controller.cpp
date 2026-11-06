@@ -47,6 +47,7 @@ extern "C" {
 #include "e3sm/l1_kpm/e3sm_layer_1.h"
 #include "e3sm/iq_pipeline.h"
 #include "e3sm/slot_iq_pipeline.h"
+#include "e3sm/prb_block_relay.h"
 
 // ---- Global state ----
 
@@ -157,6 +158,11 @@ int main(int argc, char** argv)
      * in a build without the recorder, so it is unconditional. */
     if (!config.logging.latrec_dir.empty()) {
         latrec_set_output_dir(config.logging.latrec_dir.c_str());
+    }
+    /* The main loop records the PRB block stages, and also emits their ACKs:
+     * open its ring under our name before libe3 opens one under its own. */
+    if (config.prb_block.enabled) {
+        latrec_tls_open_as(e3sm_pipeline::PrbBlockRelay::kRingRole);
     }
 
     e3config::print_config(config);
@@ -334,14 +340,34 @@ int main(int argc, char** argv)
     e3sm_pipeline::SlotIqPipeline slot_iq_pipeline(dispatcher, io_ctx,
                                                    std::move(slot_pipeline_cfg));
 
+    /* prb_block.enabled: a dApp's PRB block (RF=1, control 1) goes into the
+     * gNB's scheduler through the prb_block codelet, which E3SMSpectrum loads on
+     * the first RF=1 subscription. The main loop sends the blocks. */
+    std::unique_ptr<e3sm_pipeline::PrbBlockRelay> prb_block;
+    if (config.prb_block.enabled) {
+        e3sm_pipeline::PrbBlockRelay::Config prb_block_cfg;
+        prb_block_cfg.lcm_socket_path   = config.jbpf.lcm_socket_path;
+        prb_block_cfg.codelet_base_path = config.jbpf.codelet_base_path;
+        prb_block_cfg.latrec_dir        = config.logging.latrec_dir;
+        prb_block = std::make_unique<e3sm_pipeline::PrbBlockRelay>(io_ctx, dispatcher,
+                                                                    std::move(prb_block_cfg));
+    }
+
     // Register both service models.
-    //  - RF=1 Spectrum SM: ecpri_iq IQ telemetry (Spectrum-IQDataIndication,
-    //                       APER) via IqPipeline + PRB-blacklist control.
+    //  - RF=1 Spectrum SM: PRB-blacklist control, into the gNB's scheduler
+    //                       with prb_block.enabled; otherwise ecpri_iq IQ
+    //                       telemetry (Spectrum-IQDataIndication, APER) via
+    //                       IqPipeline.
     //  - RF=2 L1-KPM SM:   slot-level SHM-pointer IQ indications in the
     //                       configured encoding. Wired to the SlotIqPipeline.
     libe3::ErrorCode sm_result;
-    sm_result = agent.register_sm(std::make_unique<E3SMSpectrum>(
-        iq_pipeline, agent, spectrum_stats_log_path));
+    /* Borrowed like layer1_ptr below: the shutdown path stops the SM itself, so
+     * that it is done with the relay before the relay is destroyed (the agent,
+     * which owns the SM, is destroyed after it). */
+    auto          spectrum_sm  = std::make_unique<E3SMSpectrum>(
+        iq_pipeline, agent, spectrum_stats_log_path, prb_block.get(), config.radio.nof_prbs);
+    E3SMSpectrum* spectrum_ptr = spectrum_sm.get();
+    sm_result = agent.register_sm(std::move(spectrum_sm));
     if (sm_result != libe3::ErrorCode::SUCCESS) {
         std::cerr << "Failed to register Spectrum SM (RF=1): "
                   << libe3::error_code_to_string(sm_result) << "\n";
@@ -413,6 +439,9 @@ int main(int argc, char** argv)
     // Main polling loop — the dispatcher routes buffers to registered SMs
     while (g_running) {
         dispatcher.poll();
+        if (prb_block) {
+            prb_block->poll();
+        }
 
         if (busy_poll) {
 #if defined(__x86_64__) || defined(__i386__)
@@ -430,6 +459,8 @@ int main(int argc, char** argv)
     // dispatcher reads from. Both pipeline.stop() calls are idempotent
     // and safe if the pipeline was never started.
     agent.stop();
+    /* Unloads the prb_block codelet, which clears the block in the gNB. */
+    spectrum_ptr->stop();
     std::printf("[E3Controller] Stopping slot IQ pipeline...\n");
     slot_iq_pipeline.stop();
     std::printf("[E3Controller] Stopping legacy IQ pipeline...\n");
@@ -455,6 +486,9 @@ int main(int argc, char** argv)
     std::printf("[SlotIqPipeline] slots dropped on a full SPSC queue: %lu\n",
                 static_cast<unsigned long>(queue_drops));
     std::printf("%s\n", layer1_ptr->drops_summary().c_str());
+    if (prb_block) {
+        std::printf("%s\n", prb_block->summary().c_str());
+    }
 
     std::printf("[E3Controller] Stopped.\n");
 

@@ -35,6 +35,20 @@ Spectrum-RanFunctionData ::= SEQUENCE {
 -- INDICATION MESSAGE STRUCTURES
 -- ============================================================================
 
+-- Uplink carrier the sensing ranges are indexed against, from
+-- ServingCellConfigCommon.frequencyInfoUL. Emitted every cellConfigPeriodMs.
+Spectrum-CellConfigIndication ::= SEQUENCE {
+    timestamp            INTEGER,
+    ulCarrierPRBs        INTEGER (1..maxPRBs),
+    ulOffsetToCarrier    INTEGER (0..maxPRBIndex),               -- carrier start, ABSOLUTE grid PRB
+    ulSubcarrierSpacing  INTEGER (0..3),                         -- 3GPP enum, 0=15 .. 3=120 kHz
+    ulArfcnPointA        INTEGER (0..maxARFCN),                  -- DL point A when the UL one is absent
+    slotsPerFrame        INTEGER (1..maxSlotsFrame),
+    tddSlotPattern       OCTET STRING (SIZE (1..maxSlotsFrame)) OPTIONAL,  -- 'D'/'U'/'S' per slot
+    nrPci                INTEGER (0..maxPCI) OPTIONAL,
+    ...
+}
+
 -- Sensing-range telemetry indication (one per MAC sensing publish). The
 -- sensing ranges are NOT inline: they are written out-of-band into the
 -- /e3_l2_sensing POSIX shm ring; this payload carries only a reference into
@@ -67,6 +81,11 @@ Spectrum-SensingIndication ::= SEQUENCE {
     nRanges      INTEGER (0..128)
 }
 
+Spectrum-Indication ::= CHOICE {
+    sensingIndication       Spectrum-SensingIndication,
+    cellConfigIndication    Spectrum-CellConfigIndication
+}
+
 -- ============================================================================
 -- CONTROL ACTION STRUCTURES  
 -- ============================================================================
@@ -90,6 +109,16 @@ Spectrum-SensingPolicyControl ::= SEQUENCE {
     validityPeriod          INTEGER (1..3600) OPTIONAL
 }
 
+-- Slots reserved entirely for sensing; an empty list reserves nothing.
+Spectrum-SensingReservationControl ::= SEQUENCE {
+    reservedSlots           SEQUENCE (SIZE (0..maxSlotsFrame)) OF INTEGER (0..maxSlotIndex)
+}
+
+-- Slots the capture PUSCH may use; opt-in, an empty list injects nowhere.
+Spectrum-SensingPuschSlotsControl ::= SEQUENCE {
+    puschSlots              SEQUENCE (SIZE (0..maxSlotsFrame)) OF INTEGER (0..maxSlotIndex)
+}
+
 -- Extensibility marker (...) keeps the ASN.1 wire bit-width stable when new
 -- alternatives are added.  Without it, extending a 1-alt CHOICE to 2
 -- alternatives would change the APER encoding width from 0 bits to 1 bit and
@@ -97,7 +126,9 @@ Spectrum-SensingPolicyControl ::= SEQUENCE {
 Spectrum-DAppControlPayload ::= CHOICE {
     prbBlacklistControl     Spectrum-PRBBlacklistControl,
     ...,
-    sensingPolicyControl    Spectrum-SensingPolicyControl
+    sensingPolicyControl    Spectrum-SensingPolicyControl,
+    sensingReservationControl Spectrum-SensingReservationControl,
+    sensingPuschSlotsControl Spectrum-SensingPuschSlotsControl
 }
 
 -- Top-level dApp control PDU carried by E3-DAppControlAction.actionData
@@ -109,8 +140,22 @@ Spectrum-DAppControlData ::= SEQUENCE {
 -- dAPP REPORT STRUCTURES
 -- ============================================================================
 
+
+-- PRB detection parameters of the dApp.
+Spectrum-DetectionInfo ::= SEQUENCE {
+    method                  INTEGER (0..255),                               -- detection method: 0 detector, 1 model
+    embargoMs               INTEGER (0..3600000),                           -- detection embargo, milliseconds
+    aggregationWindow       INTEGER (1..1024),                              -- detection rounds aggregated per report
+    ...
+}
+
+-- PRBs reported by the dApp, with the optional policy and detection parameters.
 Spectrum-PRBBlacklistReport ::= SEQUENCE {
-    blacklistedPRBs         SEQUENCE (SIZE (0..maxPRBs)) OF INTEGER (0..maxPRBIndex)     -- List of PRB indices
+    blacklistedPRBs         SEQUENCE (SIZE (0..maxPRBs)) OF INTEGER (0..maxPRBIndex),    -- List of PRB indices
+    ...,
+    policyName              OCTET STRING (SIZE (1..32)) OPTIONAL,           -- name of the enabled dApp policy
+    lastXAppControlSequenceId INTEGER (0..4294967295) OPTIONAL,             -- sequenceId of the last xApp PRB control
+    detection               Spectrum-DetectionInfo OPTIONAL                 -- PRB detection parameters
 }
 
 Spectrum-DAppReportPayload ::= CHOICE {
@@ -154,10 +199,19 @@ Spectrum-ConfigControl ::= SEQUENCE {
     enable                  BOOLEAN OPTIONAL                                -- Enable/disable spectrum monitoring
 }
 
+-- Name, validity and state of a dApp policy.
+Spectrum-PolicyControl ::= SEQUENCE {
+    policyName              OCTET STRING (SIZE (1..32)),                    -- policy name, e.g. "autonomousBlock"
+    validityPeriod          INTEGER (1..maxPolicyValidity),                 -- validity, seconds
+    enable                  BOOLEAN,                                        -- TRUE enabled, FALSE disabled
+    ...
+}
+
 Spectrum-XAppControlPayload ::= CHOICE {
     prbBlockedControl       Spectrum-PRBBlockedControl,
     configControl           Spectrum-ConfigControl,
-    ...
+    ...,
+    policyControl           Spectrum-PolicyControl
 }
 
 -- Top-level xApp control PDU carried by E3-XAppControlAction.xAppControlData
@@ -226,6 +280,10 @@ maxPRBIndex                 INTEGER ::= 272                                 -- m
 maxSlotsFrame               INTEGER ::= 160                                 -- slots per frame at 3GPP numerology 4 (worst case); 20 at numerology 1 (30 kHz SCS)
 maxSlotIndex                INTEGER ::= 159                                 -- maxSlotsFrame - 1
 maxSymbolMask               INTEGER ::= 16383                               -- 14-bit symbol bitmap = (1 << 14) - 1
+maxARFCN                    INTEGER ::= 3279165                             -- highest NR-ARFCN, TS 38.104 table 5.4.2.1-1
+maxPCI                      INTEGER ::= 1007                                -- physical cell identities 0..1007, TS 38.211
+cellConfigPeriodMs          INTEGER ::= 1000                                -- Spectrum-CellConfigIndication emit period
+maxPolicyValidity           INTEGER ::= 4294967295                          -- seconds, uint32 maximum
 
 -- ============================================================================
 -- DEPRECATED: LEGACY eCPRI IQ PATH (E3Controller only, not in the OAI grammar)
