@@ -37,9 +37,9 @@
  *
  * TEMPORAL ONLY in this phase, plus a filter on whether any UE transmits in the
  * slot. Spatial selection (port/PRB/symbol subsets) is deliberately deferred;
- * `reserved` is where it lands, so adding it does not break the ABI. See the
- * plan's Out-of-scope section for why temporal is safe for multiple dApps and
- * spatial is not.
+ * see the plan's Out-of-scope section for why temporal is safe for multiple
+ * dApps and spatial is not. A new field changes the layout: bump
+ * E3_SLOT_SEL_VERSION, which the gNB helper checks.
  *
  * Delivered by the E3Controller over a jbpf control-input channel. That is a
  * CHANNEL, not a one-shot: the codelet caches the latest value in an array map
@@ -57,8 +57,7 @@ struct e3_slot_sel {
      *
      * ZERO MEANS PUBLISH EVERYTHING. That is the default when no dApp has
      * asked for a filter, and it makes behaviour identical to the unfiltered
-     * system. Filtering is strictly opt-in and can only ever reduce what the
-     * RAN publishes.
+     * system.
      *
      * slot_index is the index within the RADIO FRAME
      * (ocudu slot_point::slot_index() == count % nof_slots_per_frame), so at
@@ -78,14 +77,20 @@ struct e3_slot_sel {
 
     /* 1 => publish only the slots no UE transmits in: the hook's n_ue, n_pucch
      * and n_srs_ue are all 0.
-     * 0 => publish every slot */
+     * 0 => publish every slot. */
     uint8_t ue_free_only;
-
-    /* Reserved for spatial selection (port_mask, symbol range, PRB range). */
-    uint8_t reserved[19];
 };
 
-#define E3_SLOT_SEL_VERSION 1u
+/* 2: ue_free_only added, the unused reserved bytes removed (24 B, was 40). */
+#define E3_SLOT_SEL_VERSION 2u
+
+/* The controller, the codelet (BPF) and the gNB helper must all compile this
+ * layout. */
+#ifdef __cplusplus
+static_assert(sizeof(struct e3_slot_sel) == 24, "e3_slot_sel changed: bump E3_SLOT_SEL_VERSION");
+#else
+_Static_assert(sizeof(struct e3_slot_sel) == 24, "e3_slot_sel changed: bump E3_SLOT_SEL_VERSION");
+#endif
 
 /* ---- Attach config: where to publish ----
  *
@@ -196,8 +201,6 @@ struct e3_slot_desc {
     uint8_t  n_ue;
     uint8_t  n_pucch;
     uint8_t  n_srs_ue;
-
-    uint8_t  reserved[1];
 };
 
 /* No ladder rung matched the observed grid, so nothing was published. Set
