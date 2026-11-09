@@ -179,7 +179,7 @@ bool ShmIqWriter::open(const std::string& shm_name, size_t total_size,
     writer_         = writer;
     num_fh_samples_ = geom_.num_fh_samples();   // whole-row uint16 count
     row_bytes_      = geom_.row_bytes();
-    num_buffers_    = kNumBuffers;                  // double-buffered ring
+    num_buffers_    = kNumBuffers;
 
     num_fh_rows_ = rows_per_buffer(total_size, row_bytes_);
     if (num_fh_rows_ == 0) {

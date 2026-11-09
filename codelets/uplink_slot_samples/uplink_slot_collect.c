@@ -145,13 +145,6 @@ jbpf_main(void* state)
         filtered = E3_SLOT_FLAG_FILTERED;
     }
 
-    /* ---- Who transmits, also BEFORE any data movement ----
-     *
-     * The PHY passes the receptions it expects in the slot. With ue_free_only,
-     * a slot with any of them is not published, and neither is one with unknown
-     * counts (0xFF). Unlike the temporal filter, it still sends a descriptor,
-     * flagged and with nothing written, so the controller can count busy slots
-     * against free ones. */
     uint8_t ue_busy = 0;
     if (sel->ue_free_only != 0 && (ctx->n_ue | ctx->n_pucch | ctx->n_srs_ue) != 0) {
         ue_busy = 1;
