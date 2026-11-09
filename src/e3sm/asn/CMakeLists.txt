@@ -35,7 +35,7 @@ set(ASN1C_SRCS
     "${ASN1C_OUTPUT_DIR}/Spectrum-IQDataIndication.c"
     "${ASN1C_OUTPUT_DIR}/Spectrum-PRBBlacklistControl.c"
     "${ASN1C_OUTPUT_DIR}/Spectrum-RanFunctionData.c"
-    # E3SM-L1-KPM version 2: every top-level type of e3sm_layer1.asn.
+    # E3SM-L1-KPM version 1: every top-level type of e3sm_layer1.asn.
     "${ASN1C_OUTPUT_DIR}/L1KPM-Float32.c"
     "${ASN1C_OUTPUT_DIR}/L1KPM-Complex32.c"
     "${ASN1C_OUTPUT_DIR}/L1KPM-Uint32.c"

@@ -1,11 +1,11 @@
 /*
  * Tests of the L1-KPM SM codecs (src/e3sm/l1_kpm/e3sm_layer1_wrapper.*,
- * e3sm_layer1_json.*), E3SM-L1-KPM version 2.
+ * e3sm_layer1_json.*), E3SM-L1-KPM version 1.
  *
  * Build with -DE3C_BUILD_TESTS=ON and run with ctest, or directly:
  *   out/bin/test_l1_kpm_sm
  *
- * No other encoder of version 2 exists yet, so the APER checks decode what the
+ * No other encoder of version 1 exists yet, so the APER checks decode what the
  * controller encoded and compare the fields with the inputs. The JSON checks use
  * the keys of the specification (clause 8.6), written out here rather than taken
  * from the encoder.
@@ -180,7 +180,7 @@ static void test_ran_function_data_aper()
         return;
     }
     check(octets(rfd->name) == "L1-KPM", "name = L1-KPM");
-    check(rfd->version == 2, "version = 2");
+    check(rfd->version == 1, "version = 1");
     check(rfd->streams.list.count == 80, "one stream descriptor for each identifier");
 
     for (int i = 0; i < rfd->streams.list.count; ++i) {
@@ -226,7 +226,7 @@ static void test_ran_function_data_json()
     if (j.is_discarded()) {
         return;
     }
-    check(j.value("name", std::string()) == "L1-KPM" && j.value("version", 0) == 2, "name and version");
+    check(j.value("name", std::string()) == "L1-KPM" && j.value("version", 0) == 1, "name and version");
     check(j.contains("streams") && j["streams"].size() == 80, "80 stream descriptors");
     if (!j.contains("streams")) {
         return;

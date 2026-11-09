@@ -1,5 +1,5 @@
 /*
- * JSON encoder for the L1-KPM (RF=2) indication payload, E3SM-L1-KPM version 2.
+ * JSON encoder for the L1-KPM (RF=2) indication payload, E3SM-L1-KPM version 1.
  *
  * The indicationMessage.protocolData JSON schema produced by
  * encode_iq_indication_json() is the one of NVIDIA Aerial's public E3 message

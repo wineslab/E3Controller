@@ -20,7 +20,7 @@ bool encode_iq_indication_json(uint64_t timestamp_ns,
                                uint16_t valid_symbol_mask,
                                std::vector<uint8_t>& out)
 {
-    // Field set + key spelling per E3SM-L1-KPM version 2, which takes NVIDIA's
+    // Field set + key spelling per E3SM-L1-KPM version 1, which takes NVIDIA's
     // schema v1.2.0: timestamp, sfn, slot and n_cells at the root, the rest of
     // the one cell this RAN node serves in cells[0]. The dApp matches sfn/slot
     // against other telemetry of the slot and forwards them to the visualizer

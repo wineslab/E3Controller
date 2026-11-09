@@ -1,5 +1,5 @@
 /*
- * APER encoder for the L1-KPM Service Model inner payload, E3SM-L1-KPM version 2.
+ * APER encoder for the L1-KPM Service Model inner payload, E3SM-L1-KPM version 1.
  *
  * Payload schema DERIVED FROM NVIDIA Aerial's public E3 message schema
  * (indicationMessage.protocolData) — see e3sm/asn/e3sm_layer1.asn for the full
@@ -22,12 +22,12 @@
 #include <string>
 #include <vector>
 
-/* RAN-function identity advertised at setup, as E3SM-L1-KPM version 2 sets it:
- * name "L1-KPM", version 2. Sizes are checked against L1KPM-RanFunctionData
+/* RAN-function identity advertised at setup, as E3SM-L1-KPM version 1 sets it:
+ * name "L1-KPM", version 1. Sizes are checked against L1KPM-RanFunctionData
  * below. */
 #define LAYER1_RAN_FUNCTION_NAME        "L1-KPM"
 #define LAYER1_RAN_FUNCTION_DESCRIPTION "L1-KPM SM: post-FFT IQ telemetry."
-#define LAYER1_RAN_FUNCTION_VERSION     2
+#define LAYER1_RAN_FUNCTION_VERSION     1
 
 /* L1KPM-RanFunctionData: name 1..32 bytes, version 0..65535, description
  * 1..128 bytes. Checked at build time so the JSON form can never carry what
@@ -82,7 +82,7 @@ bool encode_ran_function_data_aper(const IqStreamGeometry& iq, std::vector<uint8
 
 // JSON twin of encode_ran_function_data_aper(), with the JSON keys of the
 // specification:
-//   {"name":"L1-KPM","version":2,"description":"...","streams":[
+//   {"name":"L1-KPM","version":1,"description":"...","streams":[
 //     {"telemetryIdentifier":1,"stream_id":"iq_samples","data_type":"array(int16)",
 //      "status":"available","delivery_method":{"transport_type":"shared_memory",
 //        "shared_memory_info":{"memory_key":...,"memory_size_bytes":...,"num_rows":...}}},

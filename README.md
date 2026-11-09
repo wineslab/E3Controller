@@ -33,7 +33,7 @@ message schema, in both JSON and ASN.1 (APER).
   keys directly.
 - ASN.1 (`src/e3sm/asn/e3sm_layer1.asn`, `L1KPM-Indication`) is wineslab's ASN.1
   representation **derived from** the same JSON schema (NVIDIA publishes the JSON
-  schema only): the grammar of the E3SM-L1-KPM specification, version 2, which
+  schema only): the grammar of the E3SM-L1-KPM specification, version 1, which
   follows the schema's v1.2.0 layout (slot values at the root, cell values in
   `cells`). See [Service models](docs/service-models.md).
 

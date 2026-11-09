@@ -1,5 +1,5 @@
 /*
- * APER encoder implementation for L1-KPM Indication, E3SM-L1-KPM version 2.
+ * APER encoder implementation for L1-KPM Indication, E3SM-L1-KPM version 1.
  *
  * Payload schema derived from NVIDIA Aerial's public E3 message schema
  * (see e3sm/asn/e3sm_layer1.asn for attribution).

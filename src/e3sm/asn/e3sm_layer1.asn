@@ -18,14 +18,14 @@
 -- authored translation. Modifications and additions by Institute for Intelligent Networked
 -- Systems (INSI) at Northeastern University are identified separately.
 --
--- Below the line: the grammar of the E3SM-L1-KPM specification, version 2
+-- Below the line: the grammar of the E3SM-L1-KPM specification, version 1
 -- (libe3 docs/e3sm/l1-kpm/, 05-abstract-syntax.md), unchanged. The JSON keys
 -- are the ones of NVIDIA's schema v1.2.0. Keep the two in step: edit the
 -- specification, then copy it here.
 --
 -- ****************************************************************************
 
--- E3SM-L1-KPM, version 2
+-- E3SM-L1-KPM, version 1
 
 E3SM-L1-KPM-IEs DEFINITIONS AUTOMATIC TAGS ::= BEGIN
 

@@ -1,5 +1,5 @@
 /*
- * The telemetry identifiers of E3SM-L1-KPM version 2 (clause 7.3 of the
+ * The telemetry identifiers of E3SM-L1-KPM version 1 (clause 7.3 of the
  * specification), for the stream descriptors of the RAN function data. The
  * specification lists every identifier there, also the ones a RAN node does not
  * produce, so a dApp can tell "not supported" from "unknown".

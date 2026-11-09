@@ -10,10 +10,10 @@ The controller serves two RAN functions, one Service Model each:
 How they are fed is in [Architecture](architecture.md); what they do not do yet
 is in [Known limitations](known-limitations.md).
 
-## L1-KPM (RF=2): E3SM-L1-KPM version 2
+## L1-KPM (RF=2): E3SM-L1-KPM version 1
 
 The grammar in `src/e3sm/asn/e3sm_layer1.asn` is the one of the E3SM-L1-KPM
-specification, version 2 (libe3 `docs/e3sm/l1-kpm/`), copied unchanged. Its JSON
+specification, version 1 (libe3 `docs/e3sm/l1-kpm/`), copied unchanged. Its JSON
 keys are those of NVIDIA Aerial's public E3 message schema v1.2.0 (see
 [Attribution](../README.md#attribution)).
 - **Slot-shared values at the root.** One indication carries `timestamp`, `sfn`,
@@ -51,7 +51,7 @@ FDD.
 **Breaking change from version 1.** Version 1 had a flat root (`iq_samples`,
 `n_rx_ant`, `valid_symbol_mask` next to `sfn`), and that layout is gone in both
 encodings. A dApp reads `cells[0].iq_samples` now, as NVIDIA's own dApps do since
-schema v1.2.0. An ASN.1 dApp needs the version 2 grammar. The slot hook context
+schema v1.2.0. An ASN.1 dApp needs this grammar. The slot hook context
 (`jbpf_ran_slot_ctx`) also changed, so build the gNB and the codelets from
 matching trees.
 
@@ -77,7 +77,7 @@ telemetry identifier of the specification
 | Encoding | `ranFunctionData` bytes |
 |---|---|
 | `asn1` | APER `L1KPM-RanFunctionData`, about 3 kB |
-| `json` | `{"name":"L1-KPM","version":2,"description":...,"streams":[{"telemetryIdentifier":1,"stream_id":"iq_samples","data_type":"array(int16)","status":"available","delivery_method":{...}}, ...]}`, about 10 kB |
+| `json` | `{"name":"L1-KPM","version":1,"description":...,"streams":[{"telemetryIdentifier":1,"stream_id":"iq_samples","data_type":"array(int16)","status":"available","delivery_method":{...}}, ...]}`, about 10 kB |
 
 libe3 0.2.x writes `ranFunctionData` as a hex string of these bytes in a JSON
 setup response. With [wineslab/libe3#118](https://github.com/wineslab/libe3/pull/118)

@@ -59,7 +59,7 @@ public:
     std::string name() const override { return "L1 KPM Service Model"; }
     uint32_t    version() const override { return LAYER1_RAN_FUNCTION_VERSION; }
     uint32_t    ran_function_id() const override { return RAN_FUNCTION_ID; }
-    /* The identifiers this controller produces (E3SM-L1-KPM version 2). */
+    /* The identifiers this controller produces (E3SM-L1-KPM version 1). */
     std::vector<uint32_t> telemetry_ids() const override {
         return {std::begin(e3sm_layer1::kServedTelemetryIds), std::end(e3sm_layer1::kServedTelemetryIds)};
     }
