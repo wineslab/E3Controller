@@ -194,8 +194,9 @@ logging:
   # One cumulative row per second: uptime, published, dropped_total,
   # latrec_clamped, and a column per drop reason (no_subscribers,
   # ran_published_nothing, blob_too_small, ...). The drop COUNTERS themselves are
-  # always on: the throttled live stderr line and the shutdown summary do not
-  # depend on this path.
+  # always on: the shutdown summary prints them by reason, with or without this
+  # path. Nothing is printed while running: each fault has its own message, and
+  # ue_busy (slot_filter.ue_free_only) is by design.
   #
   # This is the only file the L1-KPM SM writes. The per-slot stage CSV that used
   # to live here is gone: it opened an ofstream, wrote a row and flushed it once

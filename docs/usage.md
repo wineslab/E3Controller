@@ -203,8 +203,11 @@ Off by default; enabled by setting `logging.drops_log_path`. One cumulative row
 per second: `uptime_s, published, dropped_total, latrec_clamped`, then a column
 per drop reason. Aggregate and throttled, so it does no work on the slot path.
 
-The drop *counters* are always on — the throttled stderr line and the shutdown
-summary do not depend on this path.
+The drop *counters* are always on: the shutdown summary prints them by reason,
+with or without this path. Nothing is printed while running. Each fault has its
+own message (geometry mismatch, a helper that wrote nothing, an encode or send
+failure), and `ue_busy` drops are by design: with `slot_filter.ue_free_only`,
+every UL slot a UE transmits in is one.
 
 Per-slot stage timing is not here; see [Stage records](stage-records.md).
 
