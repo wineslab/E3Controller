@@ -63,10 +63,20 @@ void E3SMLayer1::note_drop(Drop d) {
 }
 
 void E3SMLayer1::maybe_log_drops() {
+    /* No console line: each fault prints its own message (geometry mismatch, a
+     * helper that wrote nothing, a short blob, an encode or a send failure),
+     * and the other drops are by design. With slot_filter.ue_free_only, every
+     * UL slot a UE transmits in is a ue_busy drop, so a per-second line would
+     * run for as long as a UE is attached. The shutdown summary has every
+     * counter. */
+    if (drops_log_path_.empty()) {
+        return;  /* counters still maintained; only the CSV is opt-in */
+    }
+
     /* Throttle to <=1/s. Without this, a condition that drops EVERY slot -- no
-     * subscriber yet, or a geometry mismatch -- would emit a line and a CSV row
-     * at slot rate (2000/s), which is both useless and a real cost on the
-     * worker thread. */
+     * subscriber yet, or a geometry mismatch -- would write a CSV row at slot
+     * rate (2000/s), which is both useless and a real cost on the worker
+     * thread. */
     const auto now = std::chrono::steady_clock::now();
     if (drops_last_report_.time_since_epoch().count() != 0 &&
         now - drops_last_report_ < std::chrono::seconds(1)) {
@@ -78,20 +88,8 @@ void E3SMLayer1::maybe_log_drops() {
     if (total == drops_last_total_) {
         return;  /* nothing new since the last report */
     }
-    const uint64_t since = total - drops_last_total_;
-    drops_last_total_    = total;
+    drops_last_total_ = total;
 
-    /* Live line, so a run that is silently dropping everything is visible
-     * without waiting for shutdown or opening the CSV. */
-    std::fprintf(stderr,
-        "[E3SMLayer1] dropped %lu slot(s) in the last second (%lu total, %lu published)\n",
-        static_cast<unsigned long>(since),
-        static_cast<unsigned long>(total),
-        static_cast<unsigned long>(published_slots()));
-
-    if (drops_log_path_.empty()) {
-        return;  /* counters still maintained; only the CSV is opt-in */
-    }
     if (!drops_log_.is_open()) {
         drops_log_.open(drops_log_path_, std::ios::out | std::ios::trunc);
         if (!drops_log_.is_open()) {

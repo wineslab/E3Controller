@@ -111,7 +111,7 @@ public:
     std::string drops_summary() const;
 
 private:
-    /* Bump a reason. Also drives the throttled live log line. */
+    /* Bump a reason, and the drop CSV when one is configured. */
     void note_drop(Drop d);
 
     /* Append a cumulative row to drops_log_path_, at most once a second.
@@ -178,8 +178,8 @@ private:
     /* Drop accounting -- see enum Drop. */
     std::atomic<uint64_t> drops_[kDropCount]{};
     std::ofstream         drops_log_;
-    /* Throttles both the live stderr line and the CSV row to <=1/s, so a
-     * pathological run cannot turn drop reporting into the bottleneck. */
+    /* Throttles the CSV row to <=1/s, so a pathological run cannot turn drop
+     * reporting into the bottleneck. */
     std::chrono::steady_clock::time_point drops_last_report_{};
     uint64_t                              drops_last_total_{0};
     /* Set when the drop CSV is opened, so uptime_s starts at 0 in the file. */
