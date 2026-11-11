@@ -47,6 +47,7 @@ extern "C" {
 #include "e3sm/l1_kpm/e3sm_layer_1.h"
 #include "e3sm/iq_pipeline.h"
 #include "e3sm/slot_iq_pipeline.h"
+#include "e3sm/prb_block_relay.h"
 
 // ---- Global state ----
 
@@ -157,6 +158,11 @@ int main(int argc, char** argv)
      * in a build without the recorder, so it is unconditional. */
     if (!config.logging.latrec_dir.empty()) {
         latrec_set_output_dir(config.logging.latrec_dir.c_str());
+    }
+    /* The main loop records the PRB block stages, and also emits their ACKs:
+     * open its ring under our name before libe3 opens one under its own. */
+    if (config.prb_block.enabled) {
+        latrec_tls_open_as(e3sm_pipeline::PrbBlockRelay::kRingRole);
     }
 
     e3config::print_config(config);
@@ -334,23 +340,40 @@ int main(int argc, char** argv)
     e3sm_pipeline::SlotIqPipeline slot_iq_pipeline(dispatcher, io_ctx,
                                                    std::move(slot_pipeline_cfg));
 
+    /* prb_block.enabled: a dApp's PRB block (RF=1, control 1) goes into the
+     * gNB's scheduler through the prb_block codelet, which E3SMSpectrum loads on
+     * the first RF=1 subscription. The main loop sends the blocks. */
+    std::unique_ptr<e3sm_pipeline::PrbBlockRelay> prb_block;
+    if (config.prb_block.enabled) {
+        e3sm_pipeline::PrbBlockRelay::Config prb_block_cfg;
+        prb_block_cfg.lcm_socket_path   = config.jbpf.lcm_socket_path;
+        prb_block_cfg.codelet_base_path = config.jbpf.codelet_base_path;
+        prb_block_cfg.latrec_dir        = config.logging.latrec_dir;
+        prb_block = std::make_unique<e3sm_pipeline::PrbBlockRelay>(io_ctx, dispatcher,
+                                                                    std::move(prb_block_cfg));
+    }
+
     // Register both service models.
-    //  - RF=1 Spectrum SM: ecpri_iq IQ telemetry (Spectrum-IQDataIndication,
-    //                       APER) via IqPipeline + PRB-blacklist control.
+    //  - RF=1 Spectrum SM: PRB-blacklist control, into the gNB's scheduler
+    //                       with prb_block.enabled; otherwise ecpri_iq IQ
+    //                       telemetry (Spectrum-IQDataIndication, APER) via
+    //                       IqPipeline.
     //  - RF=2 L1-KPM SM:   slot-level SHM-pointer IQ indications in the
     //                       configured encoding. Wired to the SlotIqPipeline.
     libe3::ErrorCode sm_result;
-    sm_result = agent.register_sm(std::make_unique<E3SMSpectrum>(
-        iq_pipeline, agent, spectrum_stats_log_path));
+    /* The SM borrows the relay. Both pipelines and the relay outlive it: libe3
+     * deletes the SMs in agent.stop(), before main's locals are destroyed. */
+    auto spectrum_sm = std::make_unique<E3SMSpectrum>(
+        iq_pipeline, agent, spectrum_stats_log_path, prb_block.get(), config.radio.nof_prbs);
+    sm_result = agent.register_sm(std::move(spectrum_sm));
     if (sm_result != libe3::ErrorCode::SUCCESS) {
         std::cerr << "Failed to register Spectrum SM (RF=1): "
                   << libe3::error_code_to_string(sm_result) << "\n";
         return 1;
     }
-    /* Keep a borrowed pointer so the shutdown path can print the drop
-     * accounting. The agent owns the SM and outlives this scope's use of the
-     * pointer (the summary is printed before `agent` is destroyed), so this is a
-     * read-only borrow, not a lifetime claim. */
+    /* Borrowed for the shutdown path's drop accounting. libe3 owns the SM and
+     * deletes it in agent.stop() (SmRegistry::clear()), not when `agent` is
+     * destroyed, so the shutdown path takes the summary before agent.stop(). */
     auto        layer1_sm  = std::make_unique<E3SMLayer1>(slot_iq_pipeline, agent, config);
     E3SMLayer1* layer1_ptr = layer1_sm.get();
     sm_result = agent.register_sm(std::move(layer1_sm));
@@ -413,6 +436,9 @@ int main(int argc, char** argv)
     // Main polling loop — the dispatcher routes buffers to registered SMs
     while (g_running) {
         dispatcher.poll();
+        if (prb_block) {
+            prb_block->poll();
+        }
 
         if (busy_poll) {
 #if defined(__x86_64__) || defined(__i386__)
@@ -423,22 +449,35 @@ int main(int argc, char** argv)
         }
     }
 
-    // Cleanup: stop the agent (so no more dApp messages flow), then both
-    // pipelines (each joins its worker, unregisters its dispatcher
-    // stream, and unloads its codelet if it was started), then jbpf_io.
-    // Order matters — jbpf_io_stop tears down the IPC channel the
-    // dispatcher reads from. Both pipeline.stop() calls are idempotent
-    // and safe if the pipeline was never started.
-    agent.stop();
+    // Cleanup. agent.stop() DELETES both SMs (libe3's SmRegistry::clear()
+    // stops, destroys and erases them), so nothing may use layer1_ptr after
+    // it. The slot pipeline therefore stops first: its stop() joins the
+    // worker, the only thread that bumps the L1-KPM drop counters, so the
+    // summary taken right after it is final while the SM still exists.
     std::printf("[E3Controller] Stopping slot IQ pipeline...\n");
     slot_iq_pipeline.stop();
+    const std::string l1_drops = layer1_ptr->drops_summary();
+
+    // Then the agent (no more dApp messages), the legacy pipeline, and
+    // jbpf_io last: jbpf_io_stop tears down the IPC channel the dispatcher
+    // reads from. Every stop() here is idempotent and safe if it was never
+    // started, including a pipeline the agent's SM stop already stopped.
+    agent.stop();
+    /* Unloads the prb_block codelet, which clears the block in the gNB. The
+     * Spectrum SM has normally done it already, inside agent.stop(); this goes
+     * through main's own relay, so it holds whatever libe3 did with the SM. */
+    if (prb_block) {
+        prb_block->stop();
+    }
     std::printf("[E3Controller] Stopping legacy IQ pipeline...\n");
     iq_pipeline.stop();
     std::printf("[E3Controller] Shutting down jbpf IO...\n");
     jbpf_io_stop();
 
     /* Drop accounting, printed AFTER both pipelines have joined their workers so
-     * the counters are final and no thread is still incrementing them.
+     * the counters are final and no thread is still incrementing them (the
+     * L1-KPM summary was taken after the slot pipeline joined, before
+     * agent.stop() deleted the SM).
      *
      * Two independent sources, because a slot can be lost in two places and
      * conflating them would point at the wrong fix:
@@ -454,7 +493,10 @@ int main(int argc, char** argv)
     const uint64_t queue_drops = slot_iq_pipeline.dropped_samples();
     std::printf("[SlotIqPipeline] slots dropped on a full SPSC queue: %lu\n",
                 static_cast<unsigned long>(queue_drops));
-    std::printf("%s\n", layer1_ptr->drops_summary().c_str());
+    std::printf("%s\n", l1_drops.c_str());
+    if (prb_block) {
+        std::printf("%s\n", prb_block->summary().c_str());
+    }
 
     std::printf("[E3Controller] Stopped.\n");
 

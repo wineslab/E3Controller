@@ -8,6 +8,7 @@ dependency on `jrtc-apps`.
 |---|---|---|---|
 | `ecpri_iq_samples/` | `capture_xran_packet` | `jbpf_ran_ofh` | Spectrum (RAN function 1) |
 | `uplink_slot_samples/` | `capture_uplink_slot` | `jbpf_ran_slot` | L1 (RAN function 2) |
+| `prb_block/` | `sched_prb_block` (control hook) | `jbpf_ran_mac_sched` | Spectrum (RAN function 1), PRB block control |
 
 ## Build
 

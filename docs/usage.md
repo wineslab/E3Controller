@@ -64,6 +64,9 @@ slot_filter:
   ue_free_only: false          # true = only the UL slots no UE transmits in
   slots: []                    # slot indices within the frame; empty = every slot
 
+prb_block:
+  enabled: false               # true = a dApp's PRB block goes to the gNB's scheduler
+
 target_slot: -1                # -1 = every UL slot
 ```
 
@@ -103,6 +106,7 @@ radio:
 | `threads` | `poll_core`, `worker_core`, `publisher_core`, `poll_interval_us` | `-1` = no pinning (the poll thread then sleeps rather than busy-spinning) |
 | `logging` | `drops_log_path`, `latrec_dir` | Drop accounting, and where stage-record rings land ([Stage records](stage-records.md)) |
 | `slot_filter` | `ue_free_only`, `slots` | Which captured UL slots the gNB publishes, decided in the slot codelet before any IQ moves (see below) |
+| `prb_block` | `enabled` | Apply a dApp's PRB block (RAN function 1, control 1) in the gNB's scheduler (see below) |
 | *(top level)* | `target_slot` | Forward only this slot index within a 10 ms frame; `-1` forwards every UL slot. Filters in the controller, after the gNB has published the slot; `slot_filter.slots` does the same in the gNB |
 
 ### Sensing only the slots no UE transmits in (`slot_filter`)
@@ -125,6 +129,34 @@ which its PHY expects no PUSCH, PUCCH or SRS reception.
 `slot_filter.slots` picks slot indices within the 10 ms frame, in the gNB.
 For example, `[8, 9, 18]` leaves out slot 19, which holds the PRACH occasion
 with PRACH configuration index 159.
+
+### Blocking the PRBs a dApp detected (`prb_block`)
+
+A spectrum-sharing dApp sends a Spectrum SM PRB blacklist control (RAN function
+1, control 1) with the PRBs where it detected an incumbent. With
+`prb_block.enabled: true` the gNB keeps every data allocation off those PRBs,
+in every slot, UL and DL, until the dApp's next control replaces the list; an
+empty list clears it. This is what OAI's gNB does with the same control, so the
+same dApp works with both.
+- **What avoids the PRBs.** PDSCH and PUSCH: UE data, SIB1, RAR, Msg3, Msg4 and
+  paging. PUCCH, PDCCH, SSB, PRACH, SRS and CSI-RS keep their PRBs, even inside
+  a blocked range.
+- **How it gets there.** The first dApp subscription to RAN function 1 loads the
+  `prb_block` codelet onto the gNB scheduler's `sched_prb_block` hook (the gNB
+  must be built with it, `ENABLE_JBPF=ON`). Each control goes to the codelet,
+  and the scheduler applies it from its next slot. The dApp gets its ACK when
+  the block is in the gNB, as from OAI's.
+- **When it ends.** When the last dApp leaves RAN function 1 the codelet is
+  unloaded, which clears the block. `validityPeriod` is ignored, as on OAI.
+- **RAN function 1 carries no IQ** while this is on; the IQ comes from the L1-KPM
+  SM (RAN function 2).
+- **Detect on free slots only.** If the dApp also senses the slots UEs transmit
+  in, it sees their PUSCH as interference and blocks it. Use
+  `slot_filter.ue_free_only: true`.
+
+The controller prints a `[PrbBlockRelay]` line each second with the blocks it
+received, sent and saw applied, and the gNB logs each new block (`PRB block id=...`).
+Timing the loop end to end is described in [Stage records](stage-records.md).
 
 ### Who writes the rows (`shm.writer`)
 
@@ -171,8 +203,11 @@ Off by default; enabled by setting `logging.drops_log_path`. One cumulative row
 per second: `uptime_s, published, dropped_total, latrec_clamped`, then a column
 per drop reason. Aggregate and throttled, so it does no work on the slot path.
 
-The drop *counters* are always on — the throttled stderr line and the shutdown
-summary do not depend on this path.
+The drop *counters* are always on: the shutdown summary prints them by reason,
+with or without this path. Nothing is printed while running. Each fault has its
+own message (geometry mismatch, a helper that wrote nothing, an encode or send
+failure), and `ue_busy` drops are by design: with `slot_filter.ue_free_only`,
+every UL slot a UE transmits in is one.
 
 Per-slot stage timing is not here; see [Stage records](stage-records.md).
 

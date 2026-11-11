@@ -194,8 +194,9 @@ logging:
   # One cumulative row per second: uptime, published, dropped_total,
   # latrec_clamped, and a column per drop reason (no_subscribers,
   # ran_published_nothing, blob_too_small, ...). The drop COUNTERS themselves are
-  # always on: the throttled live stderr line and the shutdown summary do not
-  # depend on this path.
+  # always on: the shutdown summary prints them by reason, with or without this
+  # path. Nothing is printed while running: each fault has its own message, and
+  # ue_busy (slot_filter.ue_free_only) is by design.
   #
   # This is the only file the L1-KPM SM writes. The per-slot stage CSV that used
   # to live here is gone: it opened an ofstream, wrote a row and flushed it once
@@ -227,4 +228,12 @@ slot_filter:
   ue_free_only: false
   # Slot indices within the 10 ms frame (0..19 at 30 kHz). Empty = every slot.
   slots: []
+# The Spectrum SM's PRB block control (RAN function 1, control 1). true: a dApp's
+# block goes into the gNB's scheduler (codelet prb_block on the scheduler's
+# sched_prb_block hook), which keeps every data allocation off those PRBs, in
+# every slot, UL and DL, until the next block replaces it.
+# RAN function 1 then carries no IQ. false: RAN function 1 is the legacy eCPRI
+# IQ path, and a block is ACKed but not applied.
+prb_block:
+  enabled: false
 target_slot: -1
