@@ -196,7 +196,7 @@ static void test_control_aper_rejections()
     check(decode_spectrum_dapp_control_aper(sensing_policy, decoded, why) == DecodeResult::unsupported,
           "a sensing policy is unsupported, not malformed");
 
-    // The two alternatives OAI's grammar added after it: a sensing slot
+    // The two alternatives the grammar added after it: a sensing slot
     // reservation (control 3) and the capture PUSCH slots (control 4).
     std::memset(&envelope, 0, sizeof(envelope));
     envelope.controlPayload.present = Spectrum_DAppControlPayload_PR_sensingReservationControl;

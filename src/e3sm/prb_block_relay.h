@@ -2,18 +2,18 @@
  * PrbBlockRelay — carries a dApp's PRB block into the gNB's scheduler.
  *
  * A dApp sends a Spectrum SM PRB blacklist control (RAN function 1, control 1):
- * the PRBs where it detected an incumbent. OAI's gNB keeps every data
+ * the PRBs where it detected an incumbent. The gNB has to keep every data
  * allocation off them, in every slot, UL and DL, until the next control
- * replaces the list. On OCUDU the E3 agent is this process, so the block has to
- * cross into the gNB, through jbpf:
+ * replaces the list. The E3 agent is this process, not the gNB, so the block
+ * has to cross into the gNB, through jbpf:
  *
  *   1. E3SMSpectrum decodes the control on libe3's inbound thread and calls
  *      submit(), which queues it.
  *   2. The main loop calls poll(), which sends the newest queued block to the
  *      prb_block codelet as control input and then ACKs every queued control.
  *      jbpf requires the thread that owns the io context for the send, which is
- *      why it happens there and not in step 1. The ACK means what OAI's does:
- *      the block is in the RAN, not yet applied.
+ *      why it happens there and not in step 1. The ACK means the block is in
+ *      the RAN, not yet applied.
  *   3. ocudu's scheduler fires the codelet's hook at the start of every slot.
  *      The codelet hands it the block in force, and the scheduler reports the
  *      blocked PRBs as used to every data allocator. The first slot that applies
@@ -22,8 +22,7 @@
  * Each control replaces the whole set, so only the newest one queued is sent;
  * the others are ACKed too, as superseded. The codelet is loaded on the first
  * RAN function 1 subscription and unloaded on the last; with no codelet the
- * scheduler's hook returns "no block", so unloading clears the block, as OAI
- * clears it when its Spectrum SM stops.
+ * scheduler's hook returns "no block", so unloading clears the block.
  *
  * Stage records (libe3 latrec, seq = the control's E3 message id):
  *   ring e3controller.prb_block, the main loop:

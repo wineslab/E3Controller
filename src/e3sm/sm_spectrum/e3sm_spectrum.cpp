@@ -13,7 +13,7 @@
 #include <cstring>
 #include <ctime>
 
-// aux2 of the decode stages, as OAI's Spectrum SM stamps them.
+// aux2 of the decode stages: the PDU type of a dApp control.
 static constexpr uint64_t kPduDAppControl = static_cast<uint64_t>(libe3::PduType::DAPP_CONTROL_ACTION);
 
 // CLOCK_MONOTONIC in ns, the clock of the stage records and of the gNB.
@@ -83,8 +83,7 @@ void E3SMSpectrum::stop() {
     if (!running_.load(std::memory_order_acquire)) return;
     running_.store(false, std::memory_order_release);
     if (prb_block_ != nullptr) {
-        // Unloading the codelet clears the block in the gNB, as OAI clears it
-        // when its Spectrum SM stops.
+        // Unloading the codelet clears the block in the gNB.
         prb_block_->stop();
         return;
     }
@@ -98,7 +97,7 @@ void E3SMSpectrum::send_ack(uint32_t id, bool ok) {
 
 std::vector<uint8_t> E3SMSpectrum::ran_function_data() const {
     // In the agent's encoding: APER Spectrum-RanFunctionData, or its JSON twin
-    // (the same fields as a JSON object), as OAI's Spectrum SM sends it.
+    // (the same fields as a JSON object).
     const libe3::EncodingFormat enc =
         agent_ ? agent_->config().encoding : libe3::EncodingFormat::ASN1;
 
@@ -251,9 +250,9 @@ libe3::ErrorCode E3SMSpectrum::handle_control_action(
     uint32_t request_message_id,
     const libe3::DAppControlAction& action)
 {
-    // Stamped as OAI's Spectrum SM stamps them, on libe3's inbound thread (its
-    // libe3.inbound ring), seq = the control's E3 message id. A NACK sent here
-    // gets ACK_SENT here; an accepted block gets it from PrbBlockRelay.
+    // Stamped on libe3's inbound thread (its libe3.inbound ring), seq = the
+    // control's E3 message id. A NACK sent here gets ACK_SENT here; an accepted
+    // block gets it from PrbBlockRelay.
     const uint64_t rx_ns = monotonic_now_ns();
     latrec_tstamp(request_message_id, LATREC_DECODE_E3SM_BEGIN, action.action_data.size(), kPduDAppControl);
     auto reject = [&](libe3::ErrorCode rc) {
@@ -263,8 +262,8 @@ libe3::ErrorCode E3SMSpectrum::handle_control_action(
         return rc;
     };
 
-    // Only the PRB blacklist control (id 1) is handled. OAI's Spectrum SM also
-    // has 2 (sensing policy), 3 (sensing reservation) and 4 (PUSCH slots).
+    // Only the PRB blacklist control (id 1) is handled. The Spectrum SM also
+    // defines 2 (sensing policy), 3 (sensing reservation) and 4 (PUSCH slots).
     if (action.control_identifier != CONTROL_ID_PRB_BLACKLIST) {
         std::fprintf(stderr,
             "[E3SMSpectrum] Rejected control id %u from dApp %u: only %u (PRB blacklist) is handled\n",
@@ -272,8 +271,8 @@ libe3::ErrorCode E3SMSpectrum::handle_control_action(
         return reject(libe3::ErrorCode::SM_ERROR_INVALID_PARAM);
     }
 
-    // The control comes in the agent's encoding, as on OAI's gNB: a JSON run
-    // takes the JSON envelope, an ASN.1 run the APER one.
+    // The control comes in the agent's encoding: JSON in a JSON run, APER in an
+    // ASN.1 run.
     const libe3::EncodingFormat enc =
         agent_ ? agent_->config().encoding : libe3::EncodingFormat::ASN1;
     const bool json = (enc == libe3::EncodingFormat::JSON);
@@ -312,7 +311,7 @@ libe3::ErrorCode E3SMSpectrum::handle_control_action(
     }
 
     // Every PRB must be on the carrier. validityPeriod and samplingThreshold
-    // are ignored, as on OAI: a block lasts until the next one replaces it.
+    // are ignored: a block lasts until the next one replaces it.
     for (const int prb : ctrl.blacklisted_prbs) {
         if (prb < 0 || static_cast<uint32_t>(prb) >= nof_prbs_) {
             std::fprintf(stderr,

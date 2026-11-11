@@ -1,8 +1,8 @@
 # prb_block
 
-Keeps the gNB's data allocations off the PRBs a dApp asked to block, in every
-slot, DL and UL, as OAI's gNB does with a Spectrum PRB blacklist control
-(RAN function 1, control 1).
+Keeps the gNB's data allocations off the PRBs a dApp asked to block with a
+Spectrum PRB blacklist control (RAN function 1, control 1), in every slot, DL
+and UL.
 
 | | |
 |---|---|

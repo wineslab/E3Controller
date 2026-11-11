@@ -209,7 +209,7 @@ slot_filter:
 # The Spectrum SM's PRB block control (RAN function 1, control 1). true: a dApp's
 # block goes into the gNB's scheduler (codelet prb_block on the scheduler's
 # sched_prb_block hook), which keeps every data allocation off those PRBs, in
-# every slot, UL and DL, until the next block replaces it -- as OAI's gNB does.
+# every slot, UL and DL, until the next block replaces it.
 # RAN function 1 then carries no IQ. false: RAN function 1 is the legacy eCPRI
 # IQ path, and a block is ACKed but not applied.
 prb_block:

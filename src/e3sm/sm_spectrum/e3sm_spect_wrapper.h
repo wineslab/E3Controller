@@ -1,10 +1,10 @@
 /*
  * Codecs for the Spectrum Service Model (RAN function 1).
  *
- * The grammar is OAI's (src/e3sm/asn/e3sm_spectrum.asn: the Spectrum SM of OAI's
- * E2SM-DAPP bridge, plus one legacy type). Each "*Data" envelope there is a
- * single-member SEQUENCE around a Payload CHOICE, and its JSON twin adds an
- * optional type key ("controlType") next to the payload; see the grammar header.
+ * The grammar is src/e3sm/asn/e3sm_spectrum.asn (the Spectrum SM, plus one
+ * legacy type). Each "*Data" envelope there is a single-member SEQUENCE around
+ * a Payload CHOICE, and its JSON twin adds an optional type key ("controlType")
+ * next to the payload; see the grammar header.
  *
  * What the controller encodes and decodes itself:
  *   - Spectrum-RanFunctionData, in the agent's encoding (APER or JSON).
@@ -70,9 +70,8 @@ bool encode_spectrum_dapp_control_aper(const SpectrumPRBBlacklistControl& in, st
 // JSON: {"controlType":"prbBlacklist","controlPayload":{"prbBlacklistControl":
 //        {"blacklistedPRBs":[...],"samplingThreshold":n,"validityPeriod":n}}}
 //        "controlType" is optional; when present it must be "prbBlacklist".
-//        blacklistedPRBs is required. These are the rules of OAI's gNB
-//        decoder, which in addition does not range-check the two optional
-//        fields; this one holds them to the grammar's ranges.
+//        blacklistedPRBs is required, and the two optional fields are held to
+//        the grammar's ranges.
 DecodeResult decode_spectrum_dapp_control_aper(const std::vector<uint8_t>& in,
                                                SpectrumPRBBlacklistControl& out,
                                                std::string& why);

@@ -12,10 +12,10 @@
  *     PRBs in this slot, DL and UL;
  *   - E3_PRB_BLOCK_NONE: no block.
  *
- * A new block from the E3Controller replaces the old one whole, as OAI's
- * Spectrum SM does; one with no PRBs clears it. The first slot that applies a
- * new block reports it on applied_out, which is how the E3Controller learns
- * when the block took effect.
+ * A new block from the E3Controller replaces the old one whole; one with no
+ * PRBs clears it. The first slot that applies a new block reports it on
+ * applied_out, which is how the E3Controller learns when the block took
+ * effect.
  *
  * With the codelet unloaded the hook returns jbpf's default, 0 =
  * E3_PRB_BLOCK_NONE, so unloading clears the block.

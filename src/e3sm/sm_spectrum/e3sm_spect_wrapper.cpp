@@ -1,6 +1,6 @@
 /*
  * Codecs for the Spectrum Service Model. APER through the asn1c-generated
- * types; JSON through nlohman, in the forms OAI's Spectrum SM uses.
+ * types; JSON through nlohman, in the forms the grammar's header describes.
  */
 
 #include "e3sm_spect_wrapper.h"
@@ -231,15 +231,15 @@ DecodeResult decode_spectrum_dapp_control_aper(const std::vector<uint8_t>& in,
 // ---------------------------------------------------------------------------
 // dApp control, JSON
 //
-// The form OAI's gNB accepts (spectrum_dec.c):
+// The accepted form:
 //   {"controlType": "prbBlacklist",
 //    "controlPayload": {"prbBlacklistControl": {"blacklistedPRBs": [5, 6],
 //                                               "samplingThreshold": 10,
 //                                               "validityPeriod": 60}}}
 // ---------------------------------------------------------------------------
 
-// The other alternatives of Spectrum-DAppControlPayload. OAI's gNB handles them;
-// this controller recognises them only to say so.
+// The other alternatives of Spectrum-DAppControlPayload. This controller
+// recognises them only to report them as unsupported.
 static bool is_other_control_type(const std::string& type)
 {
     return type == "sensingPolicy" || type == "sensingReservation" || type == "sensingPuschSlots";
@@ -362,8 +362,8 @@ DecodeResult decode_spectrum_dapp_control_json(const std::vector<uint8_t>& in,
         result.blacklisted_prbs.push_back(static_cast<int>(index));
     }
 
-    // 5. The optional fields, held to the grammar's ranges. OAI's decoder takes
-    //    any integer here; an APER control could not carry one outside them.
+    // 5. The optional fields, held to the grammar's ranges: an APER control
+    //    could not carry a value outside them either.
     if (!read_optional_int(control, "samplingThreshold", 0, 100, result.sampling_threshold, why)) {
         return DecodeResult::malformed;
     }

@@ -1,15 +1,17 @@
 /*
  * E3SMSpectrum — Spectrum Service Model (RAN function ID 1).
  *
- * The grammar is OAI's Spectrum SM (src/e3sm/asn/e3sm_spectrum.asn).
+ * The grammar is src/e3sm/asn/e3sm_spectrum.asn.
  *
  * Telemetry + control:
  *   - PRB blacklist control (control id 1): decodes Spectrum-DAppControlData in
- *     the agent's encoding (APER, or OAI's JSON envelope). With
- *     prb_block.enabled the block goes to the gNB's scheduler through
- *     PrbBlockRelay, which ACKs it once it is in the RAN; the scheduler keeps
- *     every data allocation off those PRBs, in every slot, UL and DL, as OAI's
- *     gNB does. Without it the control is decoded and ACKed but not applied.
+ *     the agent's encoding: APER, or in a JSON run the same fields as a JSON
+ *     object, {"controlType":"prbBlacklist","controlPayload":
+ *     {"prbBlacklistControl":{"blacklistedPRBs":[...]}}} (the full rules are in
+ *     e3sm_spect_wrapper.h). With prb_block.enabled the block goes to the gNB's
+ *     scheduler through PrbBlockRelay, which ACKs it once it is in the RAN; the
+ *     scheduler keeps every data allocation off those PRBs, in every slot, UL
+ *     and DL. Without it the control is decoded and ACKed but not applied.
  *   - IQ telemetry (telemetry id 1), LEGACY, only without prb_block.enabled:
  *     consumes the ecpri_iq_samples codelet via IqPipeline and emits
  *     Spectrum-IQDataIndication (APER) to subscribed dApps. Obsolete; kept
@@ -39,7 +41,7 @@
 class E3SMSpectrum : public libe3::ServiceModel {
 public:
     static constexpr uint32_t RAN_FUNCTION_ID = 1;
-    // Control ids, as in OAI's Spectrum SM (spectrum_sm.c). Only the first is handled.
+    // Control ids of the Spectrum SM. Only the first is handled.
     static constexpr uint32_t CONTROL_ID_PRB_BLACKLIST = 1;
 
     // prb_block: the relay into the gNB's scheduler, or nullptr when

@@ -181,9 +181,9 @@ struct SlotFilterConfig {
 /*
  * The Spectrum SM's PRB block control (RAN function 1, control 1). Enabled, a
  * dApp's block goes into the gNB's scheduler through the prb_block codelet,
- * which keeps every data allocation off those PRBs, in every slot, UL and DL,
- * as OAI's gNB does; RAN function 1 then carries no IQ. Disabled, RAN function 1
- * is the legacy eCPRI IQ path and a block is ACKed but not applied.
+ * which keeps every data allocation off those PRBs, in every slot, UL and DL;
+ * RAN function 1 then carries no IQ. Disabled, RAN function 1 is the legacy
+ * eCPRI IQ path and a block is ACKed but not applied.
  */
 struct PrbBlockConfig {
     bool enabled = false;

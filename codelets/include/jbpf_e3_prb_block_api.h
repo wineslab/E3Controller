@@ -3,8 +3,8 @@
  * Spectrum SM control 1).
  *
  * A dApp names the PRBs where it detected an incumbent, and the gNB keeps every
- * data allocation off them, in every slot, UL and DL, as OAI's gNB does. Shared
- * by:
+ * data allocation off them, in every slot, UL and DL, until the next block
+ * replaces them. Shared by:
  *
  *   1. codelets/prb_block/prb_block.c            (keeps the block, answers the hook)
  *   2. the scheduler in ocudu-e3                 (fires the hook, applies the mask)

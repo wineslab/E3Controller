@@ -286,7 +286,7 @@ cellConfigPeriodMs          INTEGER ::= 1000                                -- S
 maxPolicyValidity           INTEGER ::= 4294967295                          -- seconds, uint32 maximum
 
 -- ============================================================================
--- DEPRECATED: LEGACY eCPRI IQ PATH (E3Controller only, not in the OAI grammar)
+-- DEPRECATED: LEGACY eCPRI IQ PATH (E3Controller only, not in the Spectrum SM)
 -- ============================================================================
 --
 -- This section is the E3Controller's own addition. It keeps the one type the
