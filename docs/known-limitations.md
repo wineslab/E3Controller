@@ -36,6 +36,10 @@ which applies the same control:
   5), UL up to k2 (at most 11) slots after that.
 - **UE grants are contiguous**, so a block in mid-band leaves a UE one side of
   it. A HARQ retransmission that no longer fits waits until HARQ gives up.
+- **Msg3 retransmissions reuse their RBs.** ocudu sends a Msg3 retransmission
+  on the RBs of the first transmission when no other channel uses them, even if
+  a block covers them by then: Msg3 avoids a block only on its first
+  transmission.
 - **No expiry**, as on OAI: `validityPeriod` and `samplingThreshold` are
   ignored. A killed controller leaves the codelet loaded, and the last block in
   force, until the gNB restarts.
