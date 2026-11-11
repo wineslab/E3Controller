@@ -4,7 +4,7 @@ The controller serves two RAN functions, one Service Model each:
 
 | RAN function | Service model | Code | For | Encodings |
 |---|---|---|---|---|
-| RF=1 | Spectrum (OAI's grammar) | `src/e3sm/sm_spectrum/` | dApps that report PRBs to an xApp; the legacy IQ path | JSON or ASN.1 (APER); the legacy IQ indication APER only |
+| RF=1 | Spectrum  | `src/e3sm/sm_spectrum/` | dApps that report PRBs to an xApp; the legacy IQ path | JSON or ASN.1 (APER); the legacy IQ indication APER only |
 | RF=2 | L1-KPM | `src/e3sm/l1_kpm/` | L1 spectrum sensing | JSON or ASN.1 (APER) |
 
 How they are fed is in [Architecture](architecture.md); what they do not do yet
