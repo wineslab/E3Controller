@@ -190,8 +190,6 @@ void DAppReportRelay::poll()
             }
         }
     }
-
-    maybe_print_counters();
 }
 
 void DAppReportRelay::on_presence(void** bufs, int num_bufs)
@@ -222,23 +220,9 @@ void DAppReportRelay::log_presence_change(uint64_t now_ns)
     }
 }
 
-void DAppReportRelay::maybe_print_counters()
-{
-    const uint64_t total = received_.load(std::memory_order_relaxed);
-    if (total == printed_total_) {
-        return;  // nothing new
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    if (now - last_print_ < std::chrono::seconds(1)) {
-        return;
-    }
-    last_print_    = now;
-    printed_total_ = total;
-
-    std::printf("%s\n", summary().c_str());
-}
-
+/* No line per second: at the dApp's report rate it would run for the whole
+ * test. Each change is logged when it happens (first report, codelet loaded or
+ * not, xApp subscribed or gone), and the shutdown summary has every counter. */
 std::string DAppReportRelay::summary() const
 {
     char line[288];

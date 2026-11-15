@@ -43,8 +43,9 @@ which applies the same control:
 - **No expiry**, as on OAI: `validityPeriod` and `samplingThreshold` are
   ignored. A killed controller leaves the codelet loaded, and the last block in
   force, until the gNB restarts.
-- **The dApp learns only the ACK.** When each block took effect is in the
-  controller's `[PrbBlockRelay]` line, the gNB log and the stage records.
+- **The dApp learns only the ACK.** When each block took effect is in the gNB
+  log (info level) and the stage records; the controller's shutdown summary
+  (`[PrbBlockRelay]`) has the last one.
 
 ## dApp reports reach the xApp, nothing comes back
 

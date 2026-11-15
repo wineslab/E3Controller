@@ -129,8 +129,9 @@ naming the E3 agent that serves RAN function 1 (`OCUDU_L2` on OCUDU; the default
 
 ## 5. Reading the counters
 
-**E3Controller**, once a second while reports arrive, and in the shutdown
-summary:
+**E3Controller**, in the shutdown summary (while it runs, it logs only the
+changes: the first report, the codelet loaded or not, an xApp subscribed or
+gone):
 
 ```
 [DAppReportRelay] reports received 305863, forwarded 273034, dropped: no_xapp 32829, too_big 0, no_codelet 0, queue_full 0, send_failed 0

@@ -80,7 +80,6 @@ public:
 private:
     bool load_codelet();
     void unload_codelet();
-    void maybe_print_counters();
 
     // Main loop (the dispatcher): a presence message from the codelet.
     void on_presence(void** bufs, int num_bufs);
@@ -115,10 +114,6 @@ private:
     std::atomic<uint64_t> no_codelet_{0};    // the codelet could not be loaded (gNB down?)
     std::atomic<uint64_t> queue_full_{0};    // our queue was full
     std::atomic<uint64_t> send_failed_{0};   // the gNB's queue was full: nothing drains it
-
-    // poll() only: the counters line is printed at most once a second.
-    std::chrono::steady_clock::time_point last_print_{};
-    uint64_t                              printed_total_ = 0;
 
     // Must match codelets/dapp_report_relay/dapp_report_relay.yaml.
     struct jbpf_io_stream_id report_in_stream_id_ {
