@@ -283,12 +283,13 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
         /* ---- logging ---- */
         if (const auto n = root["logging"]) {
             if (!check_keys(n, "logging",
-                            {"drops_log_path", "spectrum_stats_log_path", "latrec_dir"}, err)) {
+                            {"drops_log_path", "spectrum_stats_log_path", "latrec_dir", "libe3_log_level"}, err)) {
                 return false;
             }
             get(n, "drops_log_path", out.logging.drops_log_path);
             get(n, "spectrum_stats_log_path", out.logging.spectrum_stats_log_path);
             get(n, "latrec_dir", out.logging.latrec_dir);
+            get(n, "libe3_log_level", out.logging.libe3_log_level);
         }
 
         /* ---- slot_filter ---- */
@@ -339,6 +340,11 @@ load_config(const std::string& path, ControllerConfig& out, std::string& err)
     if (!(out.shm.cbf16_scale > 0.0f)) {
         err = "shm.cbf16_scale must be > 0 (a zero or negative scale zeroes the row and "
               "silently breaks the dApp)";
+        return false;
+    }
+
+    if (out.logging.libe3_log_level < 0 || out.logging.libe3_log_level > 5) {
+        err = "logging.libe3_log_level must be 0..5 (0 none, 1 error, 2 warn, 3 info, 4 debug, 5 trace)";
         return false;
     }
 
@@ -412,6 +418,8 @@ print_config(const ControllerConfig& cfg)
     if (!cfg.logging.drops_log_path.empty()) {
         std::printf("  drop log:   %s\n", cfg.logging.drops_log_path.c_str());
     }
+    std::printf("  libe3 log:  level %d%s\n", cfg.logging.libe3_log_level,
+                cfg.logging.libe3_log_level >= 4 ? " (every PDU is logged and flushed: adds latency)" : "");
     /* Three distinguishable states, worth telling apart on startup: not
      * compiled in, compiled in and writing where libe3 was built to write, or
      * compiled in and redirected. Otherwise "I set latrec_dir and got no rings"

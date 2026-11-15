@@ -59,6 +59,7 @@ threads:
 logging:
   drops_log_path: ""           # empty disables the drop-accounting CSV
   latrec_dir: ""               # where stage-record rings go; needs --latrec
+  libe3_log_level: 2           # libe3's log: 0 none .. 5 trace; 4-5 log every PDU
 
 slot_filter:
   ue_free_only: false          # true = only the UL slots no UE transmits in
@@ -104,7 +105,7 @@ radio:
 | `jbpf` | `ipc_name`, `run_path`, `mem_size_bytes`, `lcm_socket_path`, `codelet_base_path` | Must agree with the gNB's own `jbpf:` YAML section |
 | `e3` | `encoding`, `link_layer`, `transport`, `setup_port`, `publisher_port`, `subscriber_port` | `encoding` is `asn1` or `json`; JSON/cuBB dApps expect ports 5555/5556/5557 |
 | `threads` | `poll_core`, `worker_core`, `publisher_core`, `poll_interval_us` | `-1` = no pinning (the poll thread then sleeps rather than busy-spinning) |
-| `logging` | `drops_log_path`, `latrec_dir` | Drop accounting, and where stage-record rings land ([Stage records](stage-records.md)) |
+| `logging` | `drops_log_path`, `latrec_dir`, `libe3_log_level` | Drop accounting, where stage-record rings land ([Stage records](stage-records.md)), and libe3's log level (default 2, warn; 4 and 5 log every PDU, which costs latency) |
 | `slot_filter` | `ue_free_only`, `slots` | Which captured UL slots the gNB publishes, decided in the slot codelet before any IQ moves (see below) |
 | `prb_block` | `enabled` | Apply a dApp's PRB block (RAN function 1, control 1) in the gNB's scheduler (see below) |
 | *(top level)* | `target_slot` | Forward only this slot index within a 10 ms frame; `-1` forwards every UL slot. Filters in the controller, after the gNB has published the slot; `slot_filter.slots` does the same in the gNB |
