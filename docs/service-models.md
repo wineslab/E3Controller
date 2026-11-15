@@ -79,9 +79,9 @@ telemetry identifier of the specification
 | `asn1` | APER `L1KPM-RanFunctionData`, about 3 kB |
 | `json` | `{"name":"L1-KPM","version":1,"description":...,"streams":[{"telemetryIdentifier":1,"stream_id":"iq_samples","data_type":"array(int16)","status":"available","delivery_method":{...}}, ...]}`, about 10 kB |
 
-libe3 0.2.x writes `ranFunctionData` as a hex string of these bytes in a JSON
-setup response. With [wineslab/libe3#118](https://github.com/wineslab/libe3/pull/118)
-it nests the object as JSON.
+A JSON setup response carries this object nested as JSON
+([wineslab/libe3#118](https://github.com/wineslab/libe3/pull/118), libe3 0.2.6 and
+later). libe3 0.2.5 and older wrote a hex string of these bytes instead.
 
 ## Spectrum (RF=1)
 

@@ -158,6 +158,12 @@ struct LoggingConfig {
      * when libe3 is built, by -DLIBE3_ENABLE_LATREC (./build.sh --latrec). A
      * build without it ignores this entirely. */
     std::string latrec_dir;
+
+    /* libe3's log level (E3Config::log_level): 0 none, 1 error, 2 warn, 3 info,
+     * 4 debug, 5 trace. libe3 writes to its own file, /tmp/e3_agent_<ran id>_<euid>.log,
+     * taking a mutex and flushing after every line. At 4 or 5 it logs every
+     * PDU sent and received, which puts that write in the message path. */
+    int libe3_log_level = 2;
 };
 
 /*

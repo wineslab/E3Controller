@@ -200,7 +200,7 @@ int main(int argc, char** argv)
     agentConfig.setup_port      = config.e3.setup_port;
     agentConfig.publisher_port  = config.e3.publisher_port;
     agentConfig.subscriber_port = config.e3.subscriber_port;
-    agentConfig.log_level = 5;  // 0=none, 1=err, 2=warn, 3=info, 4=debug, 5=trace
+    agentConfig.log_level = config.logging.libe3_log_level;  // logging.libe3_log_level, default 2 (warn)
     // Pin libe3's I/O threads (the RAN outbound loop in particular — it does
     // the outer encode + zmq_send) to a dedicated core if requested. Without
     // this the publisher gets scheduled out under load and it can be

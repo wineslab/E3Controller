@@ -87,8 +87,8 @@ bool encode_ran_function_data_aper(const IqStreamGeometry& iq, std::vector<uint8
 //      "status":"available","delivery_method":{"transport_type":"shared_memory",
 //        "shared_memory_info":{"memory_key":...,"memory_size_bytes":...,"num_rows":...}}},
 //     ...]}
-// libe3 0.2.x writes ranFunctionData as a hex string of these bytes; libe3 with
-// wineslab/libe3#118 nests the object.
+// libe3 nests the object in the JSON setup response (wineslab/libe3#118, libe3
+// 0.2.6 and later); 0.2.5 and older wrote a hex string of these bytes.
 bool encode_ran_function_data_json(const IqStreamGeometry& iq, std::vector<uint8_t>& out);
 
 }  // namespace e3sm_layer1
