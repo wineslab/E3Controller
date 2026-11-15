@@ -154,8 +154,9 @@ same dApp works with both.
   in, it sees their PUSCH as interference and blocks it. Use
   `slot_filter.ue_free_only: true`.
 
-The controller prints a `[PrbBlockRelay]` line each second with the blocks it
-received, sent and saw applied, and the gNB logs each new block (`PRB block id=...`).
+The controller's shutdown summary has a `[PrbBlockRelay]` line with the blocks it
+received, sent and saw applied, and the gNB logs each new block at info level
+(`PRB block id=...`).
 Timing the loop end to end is described in [Stage records](stage-records.md).
 
 ### Who writes the rows (`shm.writer`)

@@ -109,7 +109,7 @@ private:
     void hand_off(std::deque<struct e3_prb_block_msg>& batch);
     // Main loop (the dispatcher): the codelet's report of an applied block.
     void on_applied(void** bufs, int num_bufs);
-    void maybe_print_counters();
+    void maybe_heartbeat();
 
     jbpf_io_ctx*    io_ctx_;
     JbpfDispatcher& dispatcher_;
@@ -136,18 +136,18 @@ private:
     std::atomic<uint64_t> rejected_{0};    // NACKed: no codelet, queue full, or the send failed
     std::atomic<uint64_t> applied_{0};     // reports from the codelet
 
-    // on_applied() only, read by the counters line on the same thread.
+    // on_applied() only, read by summary() on the same thread.
     uint32_t last_id_       = 0;
     uint16_t last_n_prbs_   = 0;
     uint16_t last_sfn_      = 0;
     uint8_t  last_slot_     = 0;
     uint64_t last_rx_to_applied_ns_ = 0;
 
-    // poll() only: the counters line is printed at most once a second.
-    std::chrono::steady_clock::time_point last_print_{};
-    uint64_t                              printed_total_ = 0;
-
 #ifdef LIBE3_ENABLE_LATREC
+    // poll() only: the ring's heartbeat runs at most once a second.
+    std::chrono::steady_clock::time_point last_heartbeat_{};
+    uint64_t                              heartbeat_total_ = 0;
+
     // The gNB-side stamps, written by the main loop at the codelet's time. A
     // ring of their own because they are back-dated, and a ring's times must
     // ascend; the codelet's reports arrive in slot order.

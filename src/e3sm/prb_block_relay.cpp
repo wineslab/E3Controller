@@ -179,7 +179,7 @@ void PrbBlockRelay::poll()
         }
     }
 
-    maybe_print_counters();
+    maybe_heartbeat();
 }
 
 void PrbBlockRelay::hand_off(std::deque<struct e3_prb_block_msg>& batch)
@@ -247,24 +247,26 @@ void PrbBlockRelay::on_applied(void** bufs, int num_bufs)
     }
 }
 
-void PrbBlockRelay::maybe_print_counters()
+/* No counters line while running: at the dApp's block rate it would print every
+ * second of a test, and the shutdown summary has every counter. What stays is
+ * the stage ring's heartbeat, at most once a second while blocks flow, so a ring
+ * read before the controller stops still has its record count and clock pair. */
+void PrbBlockRelay::maybe_heartbeat()
 {
+#ifdef LIBE3_ENABLE_LATREC
     const uint64_t total = received_.load(std::memory_order_relaxed) + applied_.load(std::memory_order_relaxed);
-    if (total == printed_total_) {
+    if (total == heartbeat_total_) {
         return;  // nothing new
     }
 
     const auto now = std::chrono::steady_clock::now();
-    if (now - last_print_ < std::chrono::seconds(1)) {
+    if (now - last_heartbeat_ < std::chrono::seconds(1)) {
         return;
     }
-    last_print_    = now;
-    printed_total_ = total;
-
-#ifdef LIBE3_ENABLE_LATREC
+    last_heartbeat_  = now;
+    heartbeat_total_ = total;
     latrec_heartbeat(&gnb_ring_);
 #endif
-    std::printf("%s\n", summary().c_str());
 }
 
 std::string PrbBlockRelay::summary() const

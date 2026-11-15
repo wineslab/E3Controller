@@ -189,6 +189,16 @@ struct PrbBlockConfig {
     bool enabled = false;
 };
 
+/* dApp reports, passed on to the gNB's E2SM-DAPP bridge and from there to an
+ * xApp (src/e3sm/dapp_report_relay.h). */
+struct DAppReportConfig {
+    bool enabled = true;
+
+    /* Reports waiting for the main loop to send them to the gNB. A report that
+     * finds the queue full is dropped and counted. */
+    std::size_t queue_depth = 256;
+};
+
 struct ControllerConfig {
     RadioGeometry    radio;
     ShmConfig        shm;
@@ -198,6 +208,7 @@ struct ControllerConfig {
     LoggingConfig    logging;
     SlotFilterConfig slot_filter;
     PrbBlockConfig   prb_block;
+    DAppReportConfig dapp_reports;
 
     /*
      * Legacy single-slot filter, kept for compatibility.
