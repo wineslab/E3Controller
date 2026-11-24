@@ -65,7 +65,7 @@ jobs:
         id: cache-asn1c
         uses: actions/cache@v4
         with:
-          path: /opt/asn1c
+          path: /opt/libe3/asn1c
           key: asn1c-${{ runner.os }}-${{ steps.pin.outputs.sha }}
 
       - name: Cache ccache

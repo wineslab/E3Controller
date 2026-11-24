@@ -11,6 +11,8 @@ extern "C" {
 
 #include "Spectrum-IQDataIndication.h"
 #include "Spectrum-DAppControlData.h"
+#include "Spectrum-DAppControlPayload.h"
+#include "Spectrum-PRBBlacklistControl.h"
 #include "Spectrum-RanFunctionData.h"
 #include "aper_encoder.h"
 #include "aper_decoder.h"
@@ -126,8 +128,19 @@ bool encode_spectrum_dapp_control_aper(const SpectrumPRBBlacklistControl& in, st
 {
     Spectrum_DAppControlData_t envelope;
     memset(&envelope, 0, sizeof(envelope));
-    envelope.controlPayload.present = Spectrum_DAppControlPayload_PR_prbBlacklistControl;
-    Spectrum_PRBBlacklistControl_t* control = &envelope.controlPayload.choice.prbBlacklistControl;
+
+    // The payload and the CHOICE alternative are each a pointer of their own,
+    // and the runtime frees both with the envelope's contents.
+    auto* payload = static_cast<Spectrum_DAppControlPayload_t*>(calloc(1, sizeof(Spectrum_DAppControlPayload_t)));
+    auto* control = static_cast<Spectrum_PRBBlacklistControl_t*>(calloc(1, sizeof(Spectrum_PRBBlacklistControl_t)));
+    if (payload == nullptr || control == nullptr) {
+        free(payload);
+        free(control);
+        return false;
+    }
+    payload->present                     = Spectrum_DAppControlPayload_PR_prbBlacklistControl;
+    payload->choice.prbBlacklistControl = control;
+    envelope.controlPayload              = payload;
 
     bool ok = true;
 
@@ -202,16 +215,17 @@ DecodeResult decode_spectrum_dapp_control_aper(const std::vector<uint8_t>& in,
     }
 
     // A valid control of another kind, such as a sensing policy.
-    if (envelope->controlPayload.present != Spectrum_DAppControlPayload_PR_prbBlacklistControl) {
+    if (envelope->controlPayload == nullptr ||
+        envelope->controlPayload->present != Spectrum_DAppControlPayload_PR_prbBlacklistControl) {
         why = "the control is not a prbBlacklistControl (CHOICE alternative " +
-              std::to_string(envelope->controlPayload.present) + ")";
+              std::to_string(envelope->controlPayload == nullptr ? 0 : envelope->controlPayload->present) + ")";
         ASN_STRUCT_FREE(asn_DEF_Spectrum_DAppControlData, envelope);
         return DecodeResult::unsupported;
     }
 
     // PER cannot carry a value outside the grammar's constraints, so the values
     // need no range check here.
-    const Spectrum_PRBBlacklistControl_t* control = &envelope->controlPayload.choice.prbBlacklistControl;
+    const Spectrum_PRBBlacklistControl_t* control = envelope->controlPayload->choice.prbBlacklistControl;
 
     out = SpectrumPRBBlacklistControl{};
     for (int i = 0; i < control->blacklistedPRBs.list.count; i++) {
