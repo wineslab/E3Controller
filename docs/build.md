@@ -39,11 +39,11 @@ Step 0 does, in order:
    `ninja-build`, `autoconf`, `automake`, `libtool`, `m4`, `bison`, `flex`,
    `libzmq3-dev`, `nlohmann-json3-dev`, `libsctp-dev`) and builds `asn1c` from
    the `mouse07410` fork at the exact commit libe3's E3AP grammar expects,
-   installing it under `/opt/asn1c/`.
+   installing it under `/opt/libe3/asn1c/`.
 4. Adds the extras libe3 does not pull in but the E3Controller / jbpf build
    needs: `python3`, `python3-pip`, `python3-dev`, `file`, `ca-certificates`.
-5. Puts `/opt/asn1c/bin` on `PATH` so `cmake` finds `asn1c` in the same shell
-   without a manual export.
+5. Puts `/opt/libe3/asn1c/bin` on `PATH` so `cmake` finds `asn1c` in the same
+   shell without a manual export.
 
 On non-Debian distros the flag refuses to run — install the equivalent
 packages by hand and re-run `./build.sh` without `--install-deps`. -->
@@ -103,8 +103,10 @@ behaviour of an installed public header.
   makes numbers incomparable between runs.
 - `LIBE3_BUILD_TYPE=RelWithDebInfo ./build.sh` — libe3's build type.
 - If you re-build without `--install-deps` on a host where the earlier run
-  put `asn1c` under `/opt/asn1c/`, the script re-adds `/opt/asn1c/bin` to
-  `PATH` automatically before invoking `cmake`.
+  put `asn1c` under `/opt/libe3/asn1c/`, the script puts `/opt/libe3/asn1c/bin`
+  first on `PATH` automatically before invoking `cmake`. The controller needs
+  the asn1c of libe3 0.6 (1.5 or newer): an older one, such as the `/opt/asn1c`
+  that libe3 0.4 installed, is refused at configure time.
 
 ## Examples of System Building
 

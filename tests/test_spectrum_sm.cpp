@@ -20,6 +20,10 @@
 
 extern "C" {
 #include "Spectrum-DAppControlData.h"
+#include "Spectrum-DAppControlPayload.h"
+#include "Spectrum-SensingPolicyControl.h"
+#include "Spectrum-SensingPuschSlotsControl.h"
+#include "Spectrum-SensingReservationControl.h"
 #include "aper_encoder.h"
 }
 
@@ -176,10 +180,14 @@ static void test_control_aper_rejections()
 
     // A valid envelope holding the other alternative, a sensing policy. Building
     // and encoding it goes through the BOOLEAN runtime (its "deactivate" field).
+    // A CHOICE and its alternative are each a pointer of their own; the runtime
+    // frees them with the envelope's contents.
     Spectrum_DAppControlData_t envelope;
     std::memset(&envelope, 0, sizeof(envelope));
-    envelope.controlPayload.present = Spectrum_DAppControlPayload_PR_sensingPolicyControl;
-    Spectrum_SensingPolicyControl_t* policy = &envelope.controlPayload.choice.sensingPolicyControl;
+    envelope.controlPayload = (Spectrum_DAppControlPayload_t*)calloc(1, sizeof(Spectrum_DAppControlPayload_t));
+    envelope.controlPayload->present = Spectrum_DAppControlPayload_PR_sensingPolicyControl;
+    Spectrum_SensingPolicyControl_t* policy = (Spectrum_SensingPolicyControl_t*)calloc(1, sizeof(Spectrum_SensingPolicyControl_t));
+    envelope.controlPayload->choice.sensingPolicyControl = policy;
     for (int slot = 0; slot < 20; slot++) {
         long* mask = (long*)calloc(1, sizeof(long));
         *mask      = 0x3C00;
@@ -199,10 +207,13 @@ static void test_control_aper_rejections()
     // The two alternatives the grammar added after it: a sensing slot
     // reservation (control 3) and the capture PUSCH slots (control 4).
     std::memset(&envelope, 0, sizeof(envelope));
-    envelope.controlPayload.present = Spectrum_DAppControlPayload_PR_sensingReservationControl;
+    envelope.controlPayload = (Spectrum_DAppControlPayload_t*)calloc(1, sizeof(Spectrum_DAppControlPayload_t));
+    envelope.controlPayload->present = Spectrum_DAppControlPayload_PR_sensingReservationControl;
+    auto* reservation_control = (Spectrum_SensingReservationControl_t*)calloc(1, sizeof(Spectrum_SensingReservationControl_t));
+    envelope.controlPayload->choice.sensingReservationControl = reservation_control;
     long* reserved = (long*)calloc(1, sizeof(long));
     *reserved      = 19;
-    ASN_SEQUENCE_ADD(&envelope.controlPayload.choice.sensingReservationControl.reservedSlots.list, reserved);
+    ASN_SEQUENCE_ADD(&reservation_control->reservedSlots.list, reserved);
     ret = aper_encode_to_buffer(&asn_DEF_Spectrum_DAppControlData, NULL, &envelope, buffer, sizeof(buffer));
     ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_Spectrum_DAppControlData, &envelope);
     check(ret.encoded > 0, "a sensing reservation envelope encodes");
@@ -211,10 +222,13 @@ static void test_control_aper_rejections()
           "a sensing reservation is unsupported, not malformed");
 
     std::memset(&envelope, 0, sizeof(envelope));
-    envelope.controlPayload.present = Spectrum_DAppControlPayload_PR_sensingPuschSlotsControl;
+    envelope.controlPayload = (Spectrum_DAppControlPayload_t*)calloc(1, sizeof(Spectrum_DAppControlPayload_t));
+    envelope.controlPayload->present = Spectrum_DAppControlPayload_PR_sensingPuschSlotsControl;
+    auto* pusch_control = (Spectrum_SensingPuschSlotsControl_t*)calloc(1, sizeof(Spectrum_SensingPuschSlotsControl_t));
+    envelope.controlPayload->choice.sensingPuschSlotsControl = pusch_control;
     long* pusch_slot = (long*)calloc(1, sizeof(long));
     *pusch_slot      = 8;
-    ASN_SEQUENCE_ADD(&envelope.controlPayload.choice.sensingPuschSlotsControl.puschSlots.list, pusch_slot);
+    ASN_SEQUENCE_ADD(&pusch_control->puschSlots.list, pusch_slot);
     ret = aper_encode_to_buffer(&asn_DEF_Spectrum_DAppControlData, NULL, &envelope, buffer, sizeof(buffer));
     ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_Spectrum_DAppControlData, &envelope);
     check(ret.encoded > 0, "a capture PUSCH slots envelope encodes");

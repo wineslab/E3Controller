@@ -21,7 +21,9 @@ extern "C" {
 #include "L1KPM-CellData.h"
 #include "L1KPM-Delivery.h"
 #include "L1KPM-Indication.h"
+#include "L1KPM-InlineInfo.h"
 #include "L1KPM-RanFunctionData.h"
+#include "L1KPM-SharedMemoryInfo.h"
 #include "L1KPM-ShmRef.h"
 #include "L1KPM-StreamDescriptor.h"
 #include "aper_encoder.h"
@@ -149,14 +151,24 @@ bool fill_stream(L1KPM_StreamDescriptor_t& d, const StreamInfo& stream, const Iq
         return false;
     }
     if (stream.telemetry_id == kTelemetryIqSamples) {
+        // A CHOICE alternative is a pointer of its own, freed with the delivery.
         d.delivery->present = L1KPM_Delivery_PR_sharedMemory;
-        auto& shm           = d.delivery->choice.sharedMemory;
-        shm.memorySizeBytes = iq.buffer_bytes;
-        shm.numRows         = iq.num_rows;
-        return set_octets(shm.memoryKey, iq.shm_name);
+        auto* shm = static_cast<L1KPM_SharedMemoryInfo_t*>(std::calloc(1, sizeof(L1KPM_SharedMemoryInfo_t)));
+        if (shm == nullptr) {
+            return false;
+        }
+        d.delivery->choice.sharedMemory = shm;
+        shm->memorySizeBytes            = iq.buffer_bytes;
+        shm->numRows                    = iq.num_rows;
+        return set_octets(shm->memoryKey, iq.shm_name);
     }
     d.delivery->present = L1KPM_Delivery_PR_protocolData;
-    return set_octets(d.delivery->choice.protocolData.keyword, stream.stream_id);
+    auto* inline_info = static_cast<L1KPM_InlineInfo_t*>(std::calloc(1, sizeof(L1KPM_InlineInfo_t)));
+    if (inline_info == nullptr) {
+        return false;
+    }
+    d.delivery->choice.protocolData = inline_info;
+    return set_octets(inline_info->keyword, stream.stream_id);
 }
 
 }  // namespace

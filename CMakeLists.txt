@@ -219,7 +219,7 @@ FetchContent_MakeAvailable(yaml_cpp)
 
 # ---- libe3 (E3 agent library) ----
 # libe3 is the `libe3/` git submodule (https://github.com/wineslab/libe3.git,
-# pinned to tag 0.4.0). build.sh builds it with BOTH encoders and installs it to
+# pinned to tag 0.6.1). build.sh builds it with BOTH encoders and installs it to
 # /usr/local before configuring this project; we consume the installed CMake
 # package (and its ASN.1 runtime headers, see src/e3sm/asn) here. To build it by
 # hand:

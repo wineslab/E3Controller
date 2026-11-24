@@ -8,7 +8,7 @@
 #   0. (optional, --install-deps) install system packages. This step delegates
 #      to libe3's own `libe3/build_libe3 -I`, which does an apt install of the
 #      build toolchain + libzmq + nlohmann_json + libsctp and builds asn1c from
-#      the mouse07410 fork into /opt/asn1c so the file list libe3's E3AP
+#      the mouse07410 fork into /opt/libe3/asn1c so the file list libe3's E3AP
 #      grammar expects is produced. We also apt-install a small set of extras
 #      the E3Controller itself needs (python + pip for jbpf's build).
 #   1. fetch the libe3 submodule (pinned tag)
@@ -108,7 +108,7 @@ if [ "$INSTALL_DEPS" -eq 1 ]; then
   git submodule update --init libe3
 
   # Delegate to libe3's own installer: apt packages + asn1c from mouse07410
-  # into /opt/asn1c. Exits after installing per libe3's -I semantics.
+  # into /opt/libe3/asn1c. Exits after installing per libe3's -I semantics.
   # We invoke via bash explicitly since the file has no .sh extension and
   # may lose its +x bit through git config on some systems.
   bash libe3/build_libe3 -I
@@ -127,18 +127,20 @@ if [ "$INSTALL_DEPS" -eq 1 ]; then
     libyaml-cpp-dev \
     libboost-dev libboost-program-options-dev libboost-filesystem-dev
 
-  # libe3's -I lands asn1c at /opt/asn1c/bin; make sure the rest of this
+  # libe3's -I lands asn1c at /opt/libe3/asn1c/bin; make sure the rest of this
   # script (and any child cmake) can find it without a manual PATH edit.
-  export PATH="/opt/asn1c/bin:${PATH}"
+  export PATH="/opt/libe3/asn1c/bin:${PATH}"
 fi
 
 # ---------------------------------------------------------------------------
 # Make asn1c reachable even on non-fresh runs (e.g. a rebuild without
 # --install-deps on a machine where the earlier run already installed it
-# under /opt/asn1c).
+# under /opt/libe3/asn1c). It goes FIRST: the generated types must come from the
+# same asn1c as libe3's runtime, so an older asn1c elsewhere on PATH (the apt
+# one, or /opt/asn1c from libe3 before 0.6.1) must not win.
 # ---------------------------------------------------------------------------
-if [ -x /opt/asn1c/bin/asn1c ] && ! command -v asn1c >/dev/null 2>&1; then
-  export PATH="/opt/asn1c/bin:${PATH}"
+if [ -x /opt/libe3/asn1c/bin/asn1c ]; then
+  export PATH="/opt/libe3/asn1c/bin:${PATH}"
 fi
 
 # ---------------------------------------------------------------------------

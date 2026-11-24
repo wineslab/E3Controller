@@ -8,7 +8,19 @@
 # our own copy of the runtime, because different asn1c versions produce
 # incompatible struct layouts, leading to ABI mismatches and crashes.
 
+# The generated types must come from the asn1c libe3 builds its runtime with
+# (>= 1.5.1-44, installed by libe3's ./build_libe3 -I under /opt/libe3/asn1c): an
+# older one writes types whose layout differs from the runtime headers we compile
+# against, and the wrappers use the newer ones (a CHOICE alternative is a pointer).
+find_program(ASN1C_EXECUTABLE asn1c PATHS /opt/libe3/asn1c/bin NO_DEFAULT_PATH)
 find_program(ASN1C_EXECUTABLE asn1c REQUIRED)
+execute_process(COMMAND "${ASN1C_EXECUTABLE}" -version
+    OUTPUT_VARIABLE _asn1c_out ERROR_VARIABLE _asn1c_err OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_STRIP_TRAILING_WHITESPACE)
+string(REGEX MATCH "([0-9]+)\\.([0-9]+)\\.([0-9]+)" _asn1c_ver "${_asn1c_out}${_asn1c_err}")
+if(NOT _asn1c_ver OR "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}" VERSION_LESS "1.5")
+    message(FATAL_ERROR "asn1c '${_asn1c_ver}' (${ASN1C_EXECUTABLE}) is older than 1.5. Run libe3's "
+        "./build_libe3 -I, which installs a current one under /opt/libe3/asn1c.")
+endif()
 
 # Locate libe3's installed ASN.1 runtime headers (aper_encoder.h, OCTET_STRING.h, etc.)
 # We use find_path instead of find_package(libe3) because tl::expected may not

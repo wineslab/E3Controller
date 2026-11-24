@@ -16,6 +16,8 @@
 #include "e3sm/l1_kpm/e3sm_layer1_wrapper.h"
 
 extern "C" {
+#include "L1KPM-InlineInfo.h"
+#include "L1KPM-SharedMemoryInfo.h"
 #include "L1KPM-CellData.h"
 #include "L1KPM-Delivery.h"
 #include "L1KPM-Indication.h"
@@ -193,9 +195,10 @@ static void test_ran_function_data_aper()
             const bool shm = d->delivery && d->delivery->present == L1KPM_Delivery_PR_sharedMemory;
             check(shm, "ID 1 delivered through shared memory");
             if (shm) {
-                const auto& info = d->delivery->choice.sharedMemory;
-                check(octets(info.memoryKey) == kShmName, "ID 1 memoryKey");
-                check(info.memorySizeBytes == kIq.buffer_bytes && info.numRows == static_cast<long>(kIq.num_rows),
+                const auto* info = d->delivery->choice.sharedMemory;
+                check(info != nullptr && octets(info->memoryKey) == kShmName, "ID 1 memoryKey");
+                check(info != nullptr && info->memorySizeBytes == kIq.buffer_bytes &&
+                          info->numRows == static_cast<long>(kIq.num_rows),
                       "ID 1 memorySizeBytes and numRows: one buffer");
             }
         } else if (id == kTelemetryTimestamp) {
@@ -203,7 +206,9 @@ static void test_ran_function_data_aper()
                                      d->delivery->present == L1KPM_Delivery_PR_protocolData;
             check(inline_data, "ID 4 available, inline");
             if (inline_data) {
-                check(octets(d->delivery->choice.protocolData.keyword) == "timestamp", "ID 4 keyword = timestamp");
+                check(d->delivery->choice.protocolData != nullptr &&
+                          octets(d->delivery->choice.protocolData->keyword) == "timestamp",
+                      "ID 4 keyword = timestamp");
             }
         } else if (id == 34) {
             check(d->status == L1KPM_StreamStatus_unavailable && d->delivery == nullptr,
